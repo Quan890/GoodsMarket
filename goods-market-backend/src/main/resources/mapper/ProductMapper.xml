@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    ProductMapper.xml — 商品表自定义SQL映射
+    命名空间：com.market.goods.mapper.ProductMapper
+-->
+<mapper namespace="com.market.goods.mapper.ProductMapper">
+
+    <!--
+        乐观锁扣减库存（防超卖核心SQL）
+        执行逻辑：
+          1. WHERE id = ? AND version = ? — 版本号匹配才执行
+          2. WHERE stock >= quantity      — 库存充足才执行
+          3. stock - quantity             — 扣减库存
+          4. sales + quantity             — 增加销量
+          5. version + 1                  — 版本号递增（乐观锁）
+        如果 version 不匹配或库存不足，影响行数为0，业务层捕获后提示用户重试
+    -->
+    <update id="deductStock">
+        UPDATE product
+        SET stock = stock - #{quantity},
+            sales = sales + #{quantity},
+            version = version + 1,
+            update_time = NOW()
+        WHERE id = #{productId}
+          AND version = #{version}
+          AND deleted = 0
+          AND stock >= #{quantity}
+    </update>
+
+    <!--
+        乐观锁恢复库存（取消订单/退款时回滚）
+        逻辑与扣减相反：stock + quantity，sales - quantity
+    -->
+    <update id="restoreStock">
+        UPDATE product
+        SET stock = stock + #{quantity},
+            sales = sales - #{quantity},
+            version = version + 1,
+            update_time = NOW()
+        WHERE id = #{productId}
+          AND version = #{version}
+          AND deleted = 0
+    </update>
+
+    <!--
+        管理员多条件分页查询商品（关联商家店铺名）
+        条件：name（商品名模糊）、merchantId（商家ID精确）、status（上下架精确）
+        返回 ProductVO，包含 shopName
+    -->
+    <select id="selectProductPageByAdmin" resultType="com.market.goods.vo.ProductVO">
+        SELECT
+            p.id, p.name, p.subtitle, p.main_image, p.price, p.original_price,
+            p.stock, p.sales, p.status, p.sort_order, p.create_time,
+            p.merchant_id,
+            m.shop_name AS shop_name
+        FROM product p
+        LEFT JOIN merchant m ON p.merchant_id = m.id AND m.deleted = 0
+        <where>
+            p.deleted = 0
+            <!-- 商品名模糊查询 -->
+            <if test="params.name != null and params.name != ''">
+                AND p.name LIKE CONCAT('%', #{params.name}, '%')
+            </if>
+            <!-- 商家ID精确筛选 -->
+            <if test="params.merchantId != null">
+                AND p.merchant_id = #{params.merchantId}
+            </if>
+            <!-- 上下架状态精确筛选 -->
+            <if test="params.status != null">
+                AND p.status = #{params.status}
+            </if>
+            <!-- 分类ID精确筛选（支持二级分类直接筛选，或一级分类筛选其下所有二级分类） -->
+            <if test="params.categoryId != null">
+                AND p.category_id = #{params.categoryId}
+            </if>
+            <!-- 一级分类筛选：匹配该一级分类下的所有二级分类 -->
+            <if test="params.parentCategoryId != null">
+                AND p.category_id IN (SELECT id FROM category WHERE parent_id = #{params.parentCategoryId} AND deleted = 0)
+            </if>
+        </where>
+        ORDER BY p.sort_order DESC, p.create_time DESC
+    </select>
+
+</mapper>

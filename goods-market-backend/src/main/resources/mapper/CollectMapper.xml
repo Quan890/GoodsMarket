@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    CollectMapper.xml — 商品收藏表自定义SQL映射
+    命名空间：com.market.goods.mapper.CollectMapper
+-->
+<mapper namespace="com.market.goods.mapper.CollectMapper">
+
+    <!--
+        收藏列表关联商品查询（分页）
+        说明：
+          - product_collect 表通过逻辑删除实现收藏/取消收藏，查询时只取 deleted = 0
+          - 关联 product 表获取商品最新信息（名称、图片、价格可能变化）
+          - 按收藏时间倒序排列
+        返回 CollectVO
+    -->
+    <select id="selectCollectPageWithProduct" resultType="com.market.goods.vo.CollectVO">
+        SELECT
+            pc.id                           AS id,
+            pc.product_id                   AS productId,
+            p.name                          AS productName,
+            p.main_image                    AS productImage,
+            p.subtitle                      AS subtitle,
+            p.price                         AS price,
+            p.original_price                AS originalPrice,
+            p.status                        AS productStatus,
+            pc.create_time                  AS collectTime
+        FROM product_collect pc
+        INNER JOIN product p ON pc.product_id = p.id AND p.deleted = 0
+        WHERE pc.user_id = #{userId}
+          AND pc.deleted = 0
+        ORDER BY pc.create_time DESC
+    </select>
+
+    <!--
+        查询已取消收藏的记录（忽略逻辑删除过滤器）
+        使用 @TableName(existLogicalDelete=false) 或直接写SQL绕过逻辑删除
+        这里通过 selectOne + 手写SQL实现
+    -->
+    <select id="selectDeletedRecord" resultType="com.market.goods.entity.ProductCollect">
+        SELECT id, user_id, product_id, deleted, create_time
+        FROM product_collect
+        WHERE user_id = #{userId}
+          AND product_id = #{productId}
+          AND deleted = 1
+        LIMIT 1
+    </select>
+
+</mapper>

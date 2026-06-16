@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    MerchantMapper.xml — 商家表自定义SQL映射
+    命名空间：com.market.goods.mapper.MerchantMapper
+-->
+<mapper namespace="com.market.goods.mapper.MerchantMapper">
+
+    <!--
+        管理员多条件分页查询商家
+        条件：shopName（店铺名模糊）、auditStatus（审核状态精确）
+    -->
+    <select id="selectMerchantPageByAdmin" resultType="com.market.goods.entity.Merchant">
+        SELECT id, user_id, shop_name, shop_logo, description, license_no, license_img,
+               contact_name, contact_phone, address, audit_status, audit_remark,
+               create_time, update_time
+        FROM merchant
+        <where>
+            <!-- 店铺名模糊查询 -->
+            <if test="params.shopName != null and params.shopName != ''">
+                AND shop_name LIKE CONCAT('%', #{params.shopName}, '%')
+            </if>
+            <!-- 审核状态精确筛选 -->
+            <if test="params.auditStatus != null">
+                AND audit_status = #{params.auditStatus}
+            </if>
+        </where>
+        ORDER BY create_time DESC
+    </select>
+
+</mapper>

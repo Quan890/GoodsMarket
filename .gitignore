@@ -1,0 +1,35 @@
+# ==================== 后端 ====================
+goods-market-backend/target/
+goods-market-backend/.mvn/
+goods-market-backend/*.class
+goods-market-backend/*.jar
+goods-market-backend/*.log
+
+# IDE
+goods-market-backend/.idea/
+goods-market-backend/*.iml
+goods-market-backend/.settings/
+goods-market-backend/.classpath
+goods-market-backend/.project
+goods-market-backend/.factorypath
+
+# ==================== 前端 ====================
+goods-market-frontend/node_modules/
+goods-market-frontend/dist/
+goods-market-frontend/.env.local
+goods-market-frontend/.env.*.local
+goods-market-frontend/*.log
+
+# IDE
+goods-market-frontend/.vscode/
+goods-market-frontend/.idea/
+
+# ==================== 项目特定 ====================
+.claude/
+好物集市-前后端完整Claude分批生成提示词文档*.md
+
+# ==================== 系统文件 ====================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo

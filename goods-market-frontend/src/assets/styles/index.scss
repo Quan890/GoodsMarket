@@ -1,0 +1,47 @@
+// ==================== 全局样式入口 ====================
+
+// 全局变量
+$primary-color: #409eff;
+$success-color: #67c23a;
+$warning-color: #e6a23c;
+$danger-color: #f56c6c;
+$info-color: #909399;
+
+// 基础样式重置
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+// 滚动条美化
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: #c0c4cc;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+// 通用页面容器
+.page-container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+// NProgress 自定义样式
+#nprogress .bar {
+  background: $primary-color !important;
+}

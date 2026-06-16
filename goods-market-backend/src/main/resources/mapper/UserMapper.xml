@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    UserMapper.xml — 用户表自定义SQL映射
+    命名空间：com.market.goods.mapper.UserMapper
+-->
+<mapper namespace="com.market.goods.mapper.UserMapper">
+
+    <!--
+        管理员多条件分页查询用户
+        条件：phone（手机号模糊）、role（角色精确）、status（状态精确）
+        逻辑删除：MyBatis-Plus 全局配置自动追加 deleted = 0，XML中无需手动添加
+    -->
+    <select id="selectUserPageByAdmin" resultType="com.market.goods.entity.User">
+        SELECT id, username, nickname, avatar, phone, email, role, status, create_time, update_time
+        FROM user
+        <where>
+            <!-- 手机号模糊查询 -->
+            <if test="params.phone != null and params.phone != ''">
+                AND phone LIKE CONCAT('%', #{params.phone}, '%')
+            </if>
+            <!-- 角色精确筛选 -->
+            <if test="params.role != null">
+                AND role = #{params.role}
+            </if>
+            <!-- 状态精确筛选 -->
+            <if test="params.status != null">
+                AND status = #{params.status}
+            </if>
+        </where>
+        ORDER BY create_time DESC
+    </select>
+
+</mapper>

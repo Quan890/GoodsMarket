@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    CartMapper.xml — 购物车表自定义SQL映射
+    命名空间：com.market.goods.mapper.CartMapper
+-->
+<mapper namespace="com.market.goods.mapper.CartMapper">
+
+    <!--
+        购物车关联商品分页查询
+        说明：
+          - 关联 product 表获取商品最新名称、图片、价格、库存、状态
+          - 小计 subtotal 由 SQL 计算：p.price * c.quantity
+          - 下架商品仍展示但 productStatus = 0，前端置灰处理
+        返回 CartVO
+    -->
+    <select id="selectCartPageWithProduct" resultType="com.market.goods.vo.CartVO">
+        SELECT
+            c.id                            AS id,
+            c.product_id                    AS productId,
+            p.name                          AS productName,
+            p.main_image                    AS productImage,
+            p.price                         AS price,
+            p.original_price                AS originalPrice,
+            c.quantity                      AS quantity,
+            c.checked                       AS checked,
+            p.stock                         AS stock,
+            p.status                        AS productStatus,
+            (p.price * c.quantity)          AS subtotal
+        FROM cart c
+        INNER JOIN product p ON c.product_id = p.id AND p.deleted = 0
+        WHERE c.user_id = #{userId}
+          AND c.deleted = 0
+        ORDER BY c.create_time DESC
+    </select>
+
+    <!--
+        查询已逻辑删除的购物车记录（忽略逻辑删除过滤器）
+        用于恢复购物车条目
+    -->
+    <select id="selectDeletedItem" resultType="com.market.goods.entity.Cart">
+        SELECT id, user_id, product_id, quantity, checked, deleted, create_time
+        FROM cart
+        WHERE user_id = #{userId}
+          AND product_id = #{productId}
+          AND deleted = 1
+        LIMIT 1
+    </select>
+
+</mapper>

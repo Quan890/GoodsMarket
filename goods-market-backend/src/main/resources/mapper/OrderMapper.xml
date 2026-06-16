@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<!--
+    OrderMapper.xml — 订单表自定义SQL映射
+    命名空间：com.market.goods.mapper.OrderMapper
+-->
+<mapper namespace="com.market.goods.mapper.OrderMapper">
+
+    <!--
+        ==================== ResultMap：订单 → 明细 一对多映射 ====================
+        使用 collection 标签将 order_item 街道映射到 OrderVO.items 列表
+    -->
+    <resultMap id="orderWithItemsMap" type="com.market.goods.vo.OrderVO">
+        <id     property="id"              column="o_id"/>
+        <result property="orderNo"         column="o_order_no"/>
+        <result property="userId"          column="o_user_id"/>
+        <result property="merchantId"      column="o_merchant_id"/>
+        <result property="shopName"        column="o_shop_name"/>
+        <result property="totalAmount"     column="o_total_amount"/>
+        <result property="payAmount"       column="o_pay_amount"/>
+        <result property="status"          column="o_status"/>
+        <result property="payTime"         column="o_pay_time"/>
+        <result property="payMethod"       column="o_pay_method"/>
+        <result property="receiverName"    column="o_receiver_name"/>
+        <result property="receiverPhone"   column="o_receiver_phone"/>
+        <result property="receiverAddress" column="o_receiver_address"/>
+        <result property="remark"          column="o_remark"/>
+        <result property="createTime"      column="o_create_time"/>
+        <!-- 一对多：订单明细列表 -->
+        <collection property="items" ofType="com.market.goods.vo.OrderVO$OrderItemVO">
+            <id     property="id"           column="oi_id"/>
+            <result property="productId"    column="oi_product_id"/>
+            <result property="productName"  column="oi_product_name"/>
+            <result property="productImage" column="oi_product_image"/>
+            <result property="unitPrice"    column="oi_unit_price"/>
+            <result property="quantity"     column="oi_quantity"/>
+            <result property="totalPrice"   column="oi_total_price"/>
+        </collection>
+    </resultMap>
+
+    <!--
+        用户订单分页查询（关联商家店铺名）
+        说明：此查询仅返回订单主表信息 + shopName，不含明细列表
+              明细列表在订单详情接口中通过 selectOrderDetailByOrderNo 查询
+    -->
+    <select id="selectOrderPageWithMerchant" resultType="com.market.goods.vo.OrderVO">
+        SELECT
+            o.id                AS id,
+            o.order_no          AS orderNo,
+            o.merchant_id       AS merchantId,
+            m.shop_name         AS shopName,
+            o.total_amount      AS totalAmount,
+            o.pay_amount        AS payAmount,
+            o.status            AS status,
+            o.pay_time          AS payTime,
+            o.pay_method        AS payMethod,
+            o.receiver_name     AS receiverName,
+            o.receiver_phone    AS receiverPhone,
+            o.receiver_address  AS receiverAddress,
+            o.remark            AS remark,
+            o.create_time       AS createTime
+        FROM `order` o
+        LEFT JOIN merchant m ON o.merchant_id = m.id AND m.deleted = 0
+        WHERE o.user_id = #{userId}
+          AND o.deleted = 0
+          <!-- 可选：按订单状态筛选 -->
+          <if test="status != null">
+            AND o.status = #{status}
+          </if>
+        ORDER BY o.create_time DESC
+    </select>
+
+    <!--
+        订单详情查询（关联商家 + 订单明细，一对多）
+        使用 resultMap 返回 OrderVO，内含 items 列表
+    -->
+    <select id="selectOrderDetailByOrderNo" resultMap="orderWithItemsMap">
+        SELECT
+            o.id                AS o_id,
+            o.order_no          AS o_order_no,
+            o.user_id           AS o_user_id,
+            o.merchant_id       AS o_merchant_id,
+            m.shop_name         AS o_shop_name,
+            o.total_amount      AS o_total_amount,
+            o.pay_amount        AS o_pay_amount,
+            o.status            AS o_status,
+            o.pay_time          AS o_pay_time,
+            o.pay_method        AS o_pay_method,
+            o.receiver_name     AS o_receiver_name,
+            o.receiver_phone    AS o_receiver_phone,
+            o.receiver_address  AS o_receiver_address,
+            o.remark            AS o_remark,
+            o.create_time       AS o_create_time,
+            oi.id               AS oi_id,
+            oi.product_id       AS oi_product_id,
+            oi.product_name     AS oi_product_name,
+            oi.product_image    AS oi_product_image,
+            oi.unit_price       AS oi_unit_price,
+            oi.quantity         AS oi_quantity,
+            oi.total_price      AS oi_total_price
+        FROM `order` o
+        LEFT JOIN merchant m ON o.merchant_id = m.id AND m.deleted = 0
+        LEFT JOIN order_item oi ON o.id = oi.order_id AND oi.deleted = 0
+        WHERE o.order_no = #{orderNo}
+          AND o.deleted = 0
+        ORDER BY oi.create_time ASC
+    </select>
+
+    <!--
+        管理员多条件分页查询订单
+        条件：orderNo（订单号模糊）、status（状态精确）、merchantId（商家ID精确）
+    -->
+    <select id="selectOrderPageByAdmin" resultType="com.market.goods.vo.OrderVO">
+        SELECT
+            o.id                AS id,
+            o.order_no          AS orderNo,
+            o.user_id           AS userId,
+            o.merchant_id       AS merchantId,
+            m.shop_name         AS shopName,
+            o.total_amount      AS totalAmount,
+            o.pay_amount        AS payAmount,
+            o.status            AS status,
+            o.pay_time          AS payTime,
+            o.pay_method        AS payMethod,
+            o.receiver_name     AS receiverName,
+            o.receiver_phone    AS receiverPhone,
+            o.receiver_address  AS receiverAddress,
+            o.remark            AS remark,
+            o.create_time       AS createTime
+        FROM `order` o
+        LEFT JOIN merchant m ON o.merchant_id = m.id AND m.deleted = 0
+        <where>
+            o.deleted = 0
+            <!-- 订单号模糊查询 -->
+            <if test="params.orderNo != null and params.orderNo != ''">
+                AND o.order_no LIKE CONCAT('%', #{params.orderNo}, '%')
+            </if>
+            <!-- 订单状态精确筛选 -->
+            <if test="params.status != null">
+                AND o.status = #{params.status}
+            </if>
+            <!-- 商家ID精确筛选 -->
+            <if test="params.merchantId != null">
+                AND o.merchant_id = #{params.merchantId}
+            </if>
+        </where>
+        ORDER BY o.create_time DESC
+    </select>
+
+    <!--
+        SQL聚合查询已完成订单的实付金额总和
+        避免将所有订单加载到Java内存中求和
+    -->
+    <select id="selectSumPayAmount" resultType="java.math.BigDecimal">
+        SELECT COALESCE(SUM(pay_amount), 0)
+        FROM `order`
+        <where>
+            deleted = 0
+            <if test="ew != null">
+                AND ${ew.sqlSegment}
+            </if>
+        </where>
+    </select>
+
+</mapper>

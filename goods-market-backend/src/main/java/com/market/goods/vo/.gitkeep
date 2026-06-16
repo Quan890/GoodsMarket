@@ -1,0 +1,1 @@
+# vo — 视图对象（返回前端的响应数据，如 UserVO、ProductVO、OrderVO、PageResult）
