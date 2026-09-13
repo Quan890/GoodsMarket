@@ -95,7 +95,7 @@ async function handleSendCode() {
 }
 
 async function handleRegister() {
-  await formRef.value.validate()
+  try { await formRef.value.validate() } catch { return }
   loading.value = true
   try {
     await register({
@@ -106,7 +106,7 @@ async function handleRegister() {
     })
     ElMessage.success('注册成功，请登录')
     router.push('/login')
-  } finally {
+  } catch {} finally {
     loading.value = false
   }
 }

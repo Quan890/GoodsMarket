@@ -3,19 +3,32 @@ package com.market.goods.service.impl;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.market.goods.dto.MerchantApplyDTO;
 import com.market.goods.entity.Merchant;
+import com.market.goods.entity.Order;
+import com.market.goods.entity.Product;
 import com.market.goods.entity.User;
 import com.market.goods.enums.MerchantAuditEnum;
+import com.market.goods.enums.OrderStatusEnum;
 import com.market.goods.enums.UserRoleEnum;
 import com.market.goods.exception.BusinessException;
 import com.market.goods.mapper.MerchantMapper;
+import com.market.goods.mapper.OrderMapper;
+import com.market.goods.mapper.ProductMapper;
 import com.market.goods.mapper.UserMapper;
 import com.market.goods.service.MerchantService;
+import com.market.goods.vo.MerchantStatsVO;
 import com.market.goods.vo.MerchantVO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.BeanUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.util.Arrays;
+import java.util.List;
 
 /**
  * 商家模块 Service 实现类
@@ -29,6 +42,8 @@ public class MerchantServiceImpl implements MerchantService {
 
     private final MerchantMapper merchantMapper;
     private final UserMapper userMapper;
+    private final ProductMapper productMapper;
+    private final OrderMapper orderMapper;
 
     /**
      * 普通用户提交商家入驻申请
@@ -100,6 +115,70 @@ public class MerchantServiceImpl implements MerchantService {
         // 填充审核状态中文描述
         MerchantAuditEnum auditEnum = MerchantAuditEnum.ofCode(merchant.getAuditStatus());
         vo.setAuditStatusDesc(auditEnum != null ? auditEnum.getDesc() : "未知");
+
+        return vo;
+    }
+
+    /**
+     * 商家经营统计（商家中心看板）
+     */
+    @Override
+    public MerchantStatsVO getMyStats(Long userId) {
+        Merchant merchant = merchantMapper.selectOne(
+                new LambdaQueryWrapper<Merchant>().eq(Merchant::getUserId, userId));
+        if (merchant == null) {
+            throw new BusinessException("商家信息不存在，请先完成入驻申请");
+        }
+
+        Long merchantId = merchant.getId();
+        LocalDateTime todayStart = LocalDateTime.of(LocalDate.now(), LocalTime.MIN);
+        MerchantStatsVO vo = new MerchantStatsVO();
+
+        // ========== 商品统计 ==========
+        vo.setTotalProducts(productMapper.selectCount(
+                new LambdaQueryWrapper<Product>().eq(Product::getMerchantId, merchantId)));
+        vo.setOnSaleProducts(productMapper.selectCount(
+                new LambdaQueryWrapper<Product>()
+                        .eq(Product::getMerchantId, merchantId)
+                        .eq(Product::getStatus, 1)));
+
+        // ========== 订单统计 ==========
+        vo.setTotalOrders(orderMapper.selectCount(
+                new LambdaQueryWrapper<Order>().eq(Order::getMerchantId, merchantId)));
+        vo.setTodayOrders(orderMapper.selectCount(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getMerchantId, merchantId)
+                        .ge(Order::getCreateTime, todayStart)));
+        vo.setPendingShipOrders(orderMapper.selectCount(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getMerchantId, merchantId)
+                        .eq(Order::getStatus, OrderStatusEnum.PAID.getCode())));
+        vo.setShippedOrders(orderMapper.selectCount(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getMerchantId, merchantId)
+                        .eq(Order::getStatus, OrderStatusEnum.SHIPPED.getCode())));
+        vo.setCompletedOrders(orderMapper.selectCount(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getMerchantId, merchantId)
+                        .eq(Order::getStatus, OrderStatusEnum.COMPLETED.getCode())));
+
+        // ========== 金额统计（已支付/已发货/已完成订单的实付金额之和） ==========
+        List<Integer> salesStatuses = Arrays.asList(
+                OrderStatusEnum.PAID.getCode(),
+                OrderStatusEnum.SHIPPED.getCode(),
+                OrderStatusEnum.COMPLETED.getCode());
+        BigDecimal totalSales = orderMapper.selectSumPayAmount(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getMerchantId, merchantId)
+                        .in(Order::getStatus, salesStatuses));
+        vo.setTotalSales(totalSales != null ? totalSales : BigDecimal.ZERO);
+
+        BigDecimal todaySales = orderMapper.selectSumPayAmount(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getMerchantId, merchantId)
+                        .in(Order::getStatus, salesStatuses)
+                        .ge(Order::getCreateTime, todayStart));
+        vo.setTodaySales(todaySales != null ? todaySales : BigDecimal.ZERO);
 
         return vo;
     }

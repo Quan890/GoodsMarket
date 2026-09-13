@@ -7,6 +7,7 @@ import com.market.goods.entity.ProductCollect;
 import com.market.goods.vo.CollectVO;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Update;
 
 /**
  * 商品收藏表 Mapper 接口
@@ -15,6 +16,18 @@ import org.apache.ibatis.annotations.Param;
  */
 @Mapper
 public interface CollectMapper extends BaseMapper<ProductCollect> {
+
+    /**
+     * 恢复已取消（逻辑删除）的收藏记录
+     *
+     * 注意：不能用 updateById（实体带 @TableLogic 时 MP 会自动追加 WHERE deleted=0，
+     * 待恢复记录恰好 deleted=1，导致恢复静默失败），必须使用原生 SQL
+     *
+     * @param id 收藏记录ID
+     * @return 影响行数
+     */
+    @Update("UPDATE product_collect SET deleted = 0, create_time = NOW() WHERE id = #{id}")
+    int restoreDeletedRecord(@Param("id") Long id);
 
     /**
      * 分页查询用户收藏列表（关联商品表获取最新商品信息）

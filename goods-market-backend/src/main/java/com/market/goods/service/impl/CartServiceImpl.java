@@ -88,12 +88,11 @@ public class CartServiceImpl implements CartService {
             log.info("购物车累加数量：userId={}, productId={}, newQuantity={}", userId, productId, newQuantity);
         } else {
             // 5. 检查是否存在已删除的购物车记录，若有则恢复
+            // （必须用原生 SQL 恢复：updateById 会被 @TableLogic 附加 WHERE deleted=0，
+            //   待恢复记录恰好 deleted=1，导致恢复静默失败）
             Cart deletedItem = cartMapper.selectDeletedItem(userId, productId);
             if (deletedItem != null) {
-                deletedItem.setQuantity(quantity);
-                deletedItem.setChecked(1);
-                deletedItem.setDeleted(0);
-                cartMapper.updateById(deletedItem);
+                cartMapper.restoreDeletedItem(deletedItem.getId(), quantity);
                 log.info("恢复购物车商品：userId={}, productId={}, quantity={}", userId, productId, quantity);
             } else {
                 // 6. 无记录 → 新增

@@ -81,11 +81,12 @@ import {
   DataAnalysis, User, Shop, Goods, List,
   UserFilled, SwitchButton, HomeFilled,
 } from '@element-plus/icons-vue'
-import { useUserStore } from '@/stores'
+import { useUserStore, useCartStore } from '@/stores'
 
 const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
+const cartStore = useCartStore()
 
 /** 当前激活的菜单项 */
 const activeMenu = computed(() => {
@@ -108,6 +109,7 @@ async function handleLogout() {
       type: 'warning',
     })
     await userStore.logout()
+    cartStore.clearCart()
     router.replace({ name: 'Login' })
   } catch {
     // 用户取消

@@ -13,6 +13,7 @@ import com.market.goods.mapper.MerchantMapper;
 import com.market.goods.mapper.OrderMapper;
 import com.market.goods.mapper.ProductMapper;
 import com.market.goods.service.ProductService;
+import com.market.goods.util.OrderItemFiller;
 import com.market.goods.util.PageUtil;
 import com.market.goods.util.PageUtil.PageResult;
 import com.market.goods.vo.OrderVO;
@@ -23,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -44,6 +46,7 @@ public class ProductServiceImpl implements ProductService {
     private final MerchantMapper merchantMapper;
     private final CategoryMapper categoryMapper;
     private final OrderMapper orderMapper;
+    private final OrderItemFiller orderItemFiller;
 
     /**
      * 商家新增商品
@@ -58,10 +61,13 @@ public class ProductServiceImpl implements ProductService {
         // 1. 校验商家是否存在且审核通过
         Merchant merchant = validateMerchant(merchantId);
 
-        // 2. 绑定商家ID
+        // 2. 校验商品参数
+        validateProductParams(product);
+
+        // 3. 绑定商家ID
         product.setMerchantId(merchantId);
 
-        // 3. 设置默认值
+        // 4. 设置默认值
         if (product.getStatus() == null) {
             product.setStatus(1);       // 默认上架
         }
@@ -72,7 +78,7 @@ public class ProductServiceImpl implements ProductService {
             product.setSortOrder(0);    // 默认排序权重
         }
 
-        // 4. 插入数据库（version 由 MyBatis-Plus 自动初始化为 0）
+        // 5. 插入数据库（version 由 MyBatis-Plus 自动初始化为 0）
         productMapper.insert(product);
 
         log.info("商家新增商品：merchantId={}, productId={}, name={}", merchantId, product.getId(), product.getName());
@@ -90,7 +96,10 @@ public class ProductServiceImpl implements ProductService {
         // 1. 校验商品归属
         Product existing = validateProductOwner(merchantId, product.getId());
 
-        // 2. 更新允许修改的字段
+        // 2. 校验商品参数（编辑与新增共用同一套校验）
+        validateProductParams(product);
+
+        // 3. 更新允许修改的字段
         existing.setName(product.getName());
         existing.setSubtitle(product.getSubtitle());
         existing.setCategoryId(product.getCategoryId());
@@ -102,7 +111,7 @@ public class ProductServiceImpl implements ProductService {
         existing.setStock(product.getStock());
         existing.setSortOrder(product.getSortOrder());
 
-        // 3. 使用 updateById 更新（自动携带 WHERE id=? AND version=? 乐观锁条件）
+        // 4. 使用 updateById 更新（自动携带 WHERE id=? AND version=? 乐观锁条件）
         productMapper.updateById(existing);
 
         log.info("商家编辑商品：merchantId={}, productId={}", merchantId, product.getId());
@@ -198,6 +207,8 @@ public class ProductServiceImpl implements ProductService {
         }
 
         IPage<OrderVO> result = orderMapper.selectOrderPageByAdmin(page, params);
+        // 列表页需要展示商品明细，批量填充 items
+        orderItemFiller.fill(result.getRecords());
         return PageUtil.toPageResult(result);
     }
 
@@ -275,6 +286,30 @@ public class ProductServiceImpl implements ProductService {
     }
 
     // ==================== 私有校验方法 ====================
+
+    /**
+     * 校验商品基础参数（新增/编辑共用）
+     *
+     * 名称必填、价格必须大于0、库存不能为负、分类必填
+     */
+    private void validateProductParams(Product product) {
+        if (product.getName() == null || product.getName().isBlank()) {
+            throw new BusinessException("商品名称不能为空");
+        }
+        if (product.getPrice() == null || product.getPrice().signum() <= 0) {
+            throw new BusinessException("商品价格必须大于0");
+        }
+        if (product.getStock() == null || product.getStock() < 0) {
+            throw new BusinessException("商品库存不能为空且不能为负数");
+        }
+        if (product.getCategoryId() == null) {
+            throw new BusinessException("请选择商品分类");
+        }
+        if (product.getOriginalPrice() != null
+                && product.getOriginalPrice().signum() < 0) {
+            throw new BusinessException("原价不能为负数");
+        }
+    }
 
     /**
      * 校验商家是否存在且审核通过

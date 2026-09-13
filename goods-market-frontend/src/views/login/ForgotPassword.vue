@@ -88,13 +88,13 @@ async function handleSendCode() {
 }
 
 async function handleReset() {
-  await formRef.value.validate()
+  try { await formRef.value.validate() } catch { return }
   loading.value = true
   try {
     await resetPassword({ phone: form.phone, code: form.code, newPassword: form.newPassword })
     ElMessage.success('密码重置成功，请重新登录')
     router.push('/login')
-  } finally {
+  } catch {} finally {
     loading.value = false
   }
 }

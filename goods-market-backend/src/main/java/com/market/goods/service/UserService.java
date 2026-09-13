@@ -26,6 +26,9 @@ public interface UserService {
     /** 找回密码（重置密码） */
     void resetPassword(ResetPasswordDTO dto);
 
+    /** 修改密码（需登录，校验旧密码） */
+    void changePassword(Long userId, ChangePasswordDTO dto);
+
     /** 注销账户 */
     void deleteAccount(Long userId, DeleteAccountDTO dto);
 

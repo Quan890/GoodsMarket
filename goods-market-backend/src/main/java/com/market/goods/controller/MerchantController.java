@@ -4,6 +4,7 @@ import cn.dev33.satoken.stp.StpUtil;
 import com.market.goods.dto.MerchantApplyDTO;
 import com.market.goods.service.MerchantService;
 import com.market.goods.util.Result;
+import com.market.goods.vo.MerchantStatsVO;
 import com.market.goods.vo.MerchantVO;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -79,5 +80,20 @@ public class MerchantController {
         long userId = StpUtil.getLoginIdAsLong();
         MerchantVO vo = merchantService.getMyStatus(userId);
         return Result.ok(vo);
+    }
+
+    /**
+     * 商家经营统计
+     *
+     * 权限：需要登录 + 商家/管理员角色
+     * 请求：GET /api/merchant/stats
+     *
+     * 返回商家中心看板数据：商品数、在售数、各状态订单数、累计/今日销售额
+     */
+    @Operation(summary = "商家经营统计", description = "商家中心数据看板：商品/订单/销售额统计")
+    @GetMapping("/stats")
+    public Result<MerchantStatsVO> getMyStats() {
+        long userId = StpUtil.getLoginIdAsLong();
+        return Result.ok(merchantService.getMyStats(userId));
     }
 }

@@ -4,7 +4,8 @@
     <el-tabs v-model="activeStatus" @tab-change="handleTabChange">
       <el-tab-pane label="全部" name="all" />
       <el-tab-pane label="待付款" name="0" />
-      <el-tab-pane label="已付款" name="1" />
+      <el-tab-pane label="待发货" name="1" />
+      <el-tab-pane label="已发货" name="4" />
       <el-tab-pane label="已完成" name="3" />
       <el-tab-pane label="已取消" name="2" />
     </el-tabs>
@@ -36,8 +37,9 @@
           <el-tag :type="statusTagType(row.status)" size="small">{{ statusText(row.status) }}</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="120" align="center" fixed="right">
+      <el-table-column label="操作" width="150" align="center" fixed="right">
         <template #default="{ row }">
+          <el-button v-if="row.status === 1" type="success" link size="small" :loading="shipLoadingMap[row.orderNo]" @click="handleShip(row)">发货</el-button>
           <el-button type="primary" link size="small" @click="viewDetail(row)">查看详情</el-button>
         </template>
       </el-table-column>
@@ -79,10 +81,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, reactive, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Picture } from '@element-plus/icons-vue'
-import { getMyProductOrders } from '@/api/merchant'
+import { getMyProductOrders, shipOrder } from '@/api/merchant'
 import { getOrderDetail } from '@/api/order'
 
 const orderList = ref([])
@@ -91,10 +93,13 @@ const pageNum = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 const activeStatus = ref('all')
+const shipLoadingMap = reactive({})
 
-// 后端：0待支付 1已支付 2已取消 3已完成
-function statusText(s) { return { 0: '待付款', 1: '已付款', 2: '已取消', 3: '已完成' }[s] ?? '未知' }
-function statusTagType(s) { return { 0: 'warning', 1: 'primary', 2: 'info', 3: 'success' }[s] ?? 'info' }
+// 后端状态：0待支付 1已支付(待发货) 2已取消 3已完成 4已发货(待收货)
+const STATUS_TEXT = { 0: '待付款', 1: '待发货', 2: '已取消', 3: '已完成', 4: '已发货' }
+const STATUS_TAG = { 0: 'warning', 1: 'primary', 2: 'info', 3: 'success', 4: 'success' }
+function statusText(s) { return STATUS_TEXT[s] ?? '未知' }
+function statusTagType(s) { return STATUS_TAG[s] ?? 'info' }
 
 async function fetchOrders() {
   loading.value = true
@@ -110,11 +115,30 @@ async function fetchOrders() {
 
 function handleTabChange() { pageNum.value = 1; fetchOrders() }
 
+/** 商家发货（仅已支付订单） */
+async function handleShip(row) {
+  try {
+    await ElMessageBox.confirm(`确认对订单 ${row.orderNo} 发货？`, '发货确认', {
+      confirmButtonText: '确认发货', cancelButtonText: '取消', type: 'info',
+    })
+  } catch { return }
+  shipLoadingMap[row.orderNo] = true
+  try {
+    await shipOrder(row.orderNo)
+    ElMessage.success('发货成功')
+    fetchOrders()
+  } catch {} finally { shipLoadingMap[row.orderNo] = false }
+}
+
 const detailVisible = ref(false)
 const detailOrder = ref(null)
 async function viewDetail(row) {
-  try { const res = await getOrderDetail(row.orderNo); detailOrder.value = res.data; detailVisible.value = true }
-  catch { ElMessage.error('获取订单详情失败') }
+  // 请求拦截器已统一弹出错误提示，这里静默失败即可，避免重复弹窗
+  try {
+    const res = await getOrderDetail(row.orderNo)
+    detailOrder.value = res.data
+    detailVisible.value = true
+  } catch {}
 }
 
 onMounted(() => { fetchOrders() })

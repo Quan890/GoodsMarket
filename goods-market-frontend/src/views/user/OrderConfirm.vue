@@ -1,8 +1,9 @@
 <template>
   <div class="confirm-page">
     <h2 class="page-title">确认订单</h2>
-    <el-empty v-if="!loading && cartItems.length === 0" description="没有选中的商品">
-      <el-button type="primary" @click="router.push({ name: 'UserCart' })">返回购物车</el-button>
+    <el-empty v-if="!loading && cartItems.length === 0" :description="isBuyNow ? '商品不存在或已下架' : '没有选中的商品'">
+      <el-button v-if="!isBuyNow" type="primary" @click="router.push({ name: 'UserCart' })">返回购物车</el-button>
+      <el-button v-else type="primary" @click="router.push({ name: 'Home' })">去逛逛</el-button>
     </el-empty>
     <template v-else>
       <!-- 收货地址 -->
@@ -26,7 +27,10 @@
 
       <!-- 商品清单 -->
       <div class="section goods-section">
-        <div class="section-title"><el-icon><ShoppingCart /></el-icon>商品清单<span class="goods-count">共 {{ totalQuantity }} 件</span></div>
+        <div class="section-title">
+          <el-icon><ShoppingCart /></el-icon>商品清单
+          <span class="goods-count">共 {{ totalQuantity }} 件</span>
+        </div>
         <div class="goods-list">
           <div v-for="item in cartItems" :key="item.productId" class="goods-item">
             <el-image :src="item.productImage" fit="cover" class="goods-image">
@@ -45,17 +49,17 @@
 
       <!-- 结算信息 -->
       <div class="section settle-section">
-        <div class="settle-row"><span>商品金额</span><span>￥{{ cartStore.checkedTotalPriceYuan }}</span></div>
+        <div class="settle-row"><span>商品金额</span><span>￥{{ totalPriceYuan }}</span></div>
         <div class="settle-row"><span>运费</span><span class="free-shipping">免运费</span></div>
         <div class="settle-divider" />
-        <div class="settle-row settle-total"><span>应付金额</span><span class="total-price">￥{{ cartStore.checkedTotalPriceYuan }}</span></div>
+        <div class="settle-row settle-total"><span>应付金额</span><span class="total-price">￥{{ totalPriceYuan }}</span></div>
       </div>
 
       <!-- 提交栏 -->
       <div class="submit-bar">
         <div class="submit-left">
           <span class="submit-count">共 {{ totalQuantity }} 件</span>
-          <span class="submit-price">应付：<strong>￥{{ cartStore.checkedTotalPriceYuan }}</strong></span>
+          <span class="submit-price">应付：<strong>￥{{ totalPriceYuan }}</strong></span>
         </div>
         <el-button type="danger" size="large" :loading="submitting" :disabled="cartItems.length === 0" @click="handleSubmit">提交订单</el-button>
       </div>
@@ -65,18 +69,32 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { Location, ShoppingCart, Picture } from '@element-plus/icons-vue'
 import { useCartStore } from '@/stores'
 import { createOrder } from '@/api/order'
+import { getProductDetail } from '@/api/product'
 import { isValidPhone } from '@/utils/common'
 
+const route = useRoute()
 const router = useRouter()
 const cartStore = useCartStore()
+
+/**
+ * 两种结算模式：
+ *   1. buyNow（?productId=xxx&quantity=n）—— 商品详情"立即购买"，直接结算该商品，不经过购物车
+ *   2. 购物车结算 —— 结算购物车中已勾选的商品
+ */
+const isBuyNow = computed(() => !!route.query.productId)
+const buyNowItem = ref(null)
 const loading = ref(false)
-const cartItems = computed(() => cartStore.checkedList)
+const submitting = ref(false)
+
+const cartItems = computed(() => (isBuyNow.value ? (buyNowItem.value ? [buyNowItem.value] : []) : cartStore.checkedList))
 const totalQuantity = computed(() => cartItems.value.reduce((sum, item) => sum + item.quantity, 0))
+const totalPrice = computed(() => cartItems.value.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0))
+const totalPriceYuan = computed(() => totalPrice.value.toFixed(2))
 
 // 收货地址表单（后端 createOrder 需要 receiverName/receiverPhone/receiverAddress/items）
 const addressFormRef = ref(null)
@@ -90,7 +108,29 @@ const addressRules = {
   receiverAddress: [{ required: true, message: '请输入收货地址', trigger: 'blur' }],
 }
 
-const submitting = ref(false)
+/** 加载立即购买的商品 */
+async function fetchBuyNowProduct() {
+  const productId = route.query.productId
+  const quantity = Math.max(1, parseInt(route.query.quantity, 10) || 1)
+  if (!productId) return
+  loading.value = true
+  try {
+    const detail = await getProductDetail(productId)
+    const p = detail.data || {}
+    if (p.status !== 1) { buyNowItem.value = null; return }
+    buyNowItem.value = {
+      productId: p.id,
+      productName: p.name,
+      productImage: p.mainImage,
+      price: p.price,
+      quantity: Math.min(quantity, p.stock > 0 ? p.stock : quantity),
+    }
+  } catch {
+    buyNowItem.value = null
+  } finally {
+    loading.value = false
+  }
+}
 
 async function handleSubmit() {
   if (submitting.value) return
@@ -100,22 +140,27 @@ async function handleSubmit() {
   submitting.value = true
   try {
     // 后端入参：{ receiverName, receiverPhone, receiverAddress, remark, items: [{productId, quantity}] }
-    await createOrder({
+    // 跨商家结算时后端会拆单，返回订单号数组
+    const res = await createOrder({
       receiverName: addressForm.receiverName,
       receiverPhone: addressForm.receiverPhone,
       receiverAddress: addressForm.receiverAddress,
       remark: addressForm.remark || undefined,
       items: cartItems.value.map((item) => ({ productId: item.productId, quantity: item.quantity })),
     })
-    ElMessage.success('订单创建成功')
-    // 刷新购物车
-    cartStore.fetchCartList()
-    router.replace({ name: 'UserOrder' })
+    const orderNos = res.data || []
+    ElMessage.success(`订单创建成功（${orderNos.length} 个子订单）`)
+    // 刷新购物车（下单成功后后端已清除对应条目）
+    if (!isBuyNow.value) cartStore.fetchCartList()
+    // 跳转收银台：多个订单号用逗号拼接
+    router.replace({ name: 'Payment', params: { orderNo: orderNos.join(',') } })
   } catch {} finally { submitting.value = false }
 }
 
 onMounted(() => {
-  if (cartStore.cartList.length === 0) {
+  if (isBuyNow.value) {
+    fetchBuyNowProduct()
+  } else if (cartStore.cartList.length === 0) {
     loading.value = true
     cartStore.fetchCartList().finally(() => { loading.value = false })
   }

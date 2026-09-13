@@ -30,6 +30,11 @@ export function resetPassword(data) {
   return request.post('/user/reset-password', data)
 }
 
+/** 修改密码（需登录，修改成功后需重新登录） */
+export function changePassword(data) {
+  return request.put('/user/password', data)
+}
+
 /** 注销账户 */
 export function deleteAccount(data) {
   return request.post('/user/delete-account', data)

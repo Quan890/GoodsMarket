@@ -372,9 +372,8 @@ function clearCategoryFilter() {
 async function handleAddCart(item) {
   cartLoadingMap[item.id] = true
   try {
-    const { addToCart } = await import('@/api/cart')
-    await addToCart({ productId: item.id, quantity: 1 })
-    ElMessage.success('已加入购物车')
+    // 走 cart store，加购成功后顶栏购物车徽标实时更新
+    await cartStore.addItem({ productId: item.id, quantity: 1 })
   } catch {} finally { cartLoadingMap[item.id] = false }
 }
 

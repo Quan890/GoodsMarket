@@ -106,11 +106,13 @@ async function handleAddCart() {
   catch {} finally { cartLoading.value = false }
 }
 
+/** 立即购买：携带商品与数量直接进入结算页（不写入购物车） */
 function handleBuyNow() {
   if (!product.value) return
-  cartStore.addItem({ productId: product.value.id, quantity: quantity.value }).then(() => {
-    router.push({ name: 'OrderConfirm' })
-  }).catch(() => {})
+  router.push({
+    name: 'OrderConfirm',
+    query: { productId: product.value.id, quantity: quantity.value },
+  })
 }
 
 function goLogin() { router.push({ name: 'Login', query: { redirect: route.fullPath } }) }

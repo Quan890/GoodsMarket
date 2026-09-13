@@ -2,42 +2,59 @@
   <div class="payment-page">
     <div class="payment-card">
       <div v-if="loading" v-loading="true" style="min-height: 300px" />
-      <template v-else-if="order">
+      <template v-else-if="orders.length > 0">
         <div class="pay-status">
           <el-icon :size="48" color="#e6a23c"><Clock /></el-icon>
           <h2 class="status-text">等待支付</h2>
           <p class="status-tip">请在30分钟内完成支付，超时订单将自动取消</p>
         </div>
-        <div class="order-info">
-          <div class="info-row"><span class="info-label">订单号</span><span class="info-value order-no">{{ order.orderNo }} <el-button type="primary" link size="small" @click="copyOrderNo">复制</el-button></span></div>
-          <div class="info-row"><span class="info-label">下单时间</span><span class="info-value">{{ order.createTime }}</span></div>
+
+        <!-- 单订单信息 -->
+        <div v-if="orders.length === 1" class="order-info">
+          <div class="info-row">
+            <span class="info-label">订单号</span>
+            <span class="info-value order-no">{{ orders[0].orderNo }}
+              <el-button type="primary" link size="small" @click="copyOrderNo(orders[0].orderNo)">复制</el-button>
+            </span>
+          </div>
+          <div class="info-row"><span class="info-label">下单时间</span><span class="info-value">{{ orders[0].createTime }}</span></div>
         </div>
+        <!-- 多订单（跨商家拆单）信息 -->
+        <div v-else class="order-info">
+          <div class="info-row"><span class="info-label">子订单</span><span class="info-value">{{ orders.length }} 个（已按商家拆分）</span></div>
+          <div v-for="o in orders" :key="o.orderNo" class="info-row">
+            <span class="info-label">{{ o.shopName || '订单' }}</span>
+            <span class="info-value">￥{{ o.payAmount || o.totalAmount }}</span>
+          </div>
+        </div>
+
         <div class="pay-amount">
           <span class="amount-label">应付金额</span>
           <span class="amount-symbol">￥</span>
-          <span class="amount-value">{{ order.payAmount || order.totalAmount }}</span>
+          <span class="amount-value">{{ totalPayAmountYuan }}</span>
         </div>
+
         <div class="pay-methods">
           <div class="methods-title">选择支付方式</div>
           <div class="method-item" :class="{ active: payMethod === 'mock' }" @click="payMethod = 'mock'">
             <div class="method-icon mock-icon"><el-icon :size="24"><Monitor /></el-icon></div>
-            <div class="method-info"><span class="method-name">模拟支付</span><span class="method-desc">开发调试用，直接标记为已支付</span></div>
+            <div class="method-info"><span class="method-name">模拟支付</span><span class="method-desc">演示环境快捷支付，直接标记为已支付</span></div>
             <el-radio :value="'mock'" v-model="payMethod" />
           </div>
           <div class="method-item" :class="{ active: payMethod === 'wx' }" @click="payMethod = 'wx'">
             <div class="method-icon wx-icon"><el-icon :size="24"><ChatDotRound /></el-icon></div>
-            <div class="method-info"><span class="method-name">微信支付</span><span class="method-desc">使用微信扫码或唤起支付</span></div>
+            <div class="method-info"><span class="method-name">微信支付</span><span class="method-desc">需配置微信商户参数后可用</span></div>
             <el-radio :value="'wx'" v-model="payMethod" />
           </div>
         </div>
+
         <div class="pay-actions">
           <el-button type="danger" size="large" :loading="payLoading" class="pay-btn" @click="handlePay">
             {{ payMethod === 'mock' ? '确认支付（模拟）' : '立即支付' }}
           </el-button>
         </div>
         <div class="pay-footer">
-          <el-button type="primary" link @click="goOrderDetail">查看订单详情</el-button>
-          <el-button type="info" link @click="goOrderList">返回我的订单</el-button>
+          <el-button type="primary" link @click="goOrderList">返回我的订单</el-button>
         </div>
       </template>
       <el-empty v-else description="订单不存在">
@@ -48,57 +65,129 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Clock, Monitor, ChatDotRound } from '@element-plus/icons-vue'
-import { getOrderDetail, mockPay } from '@/api/order'
+import { getOrderDetail, mockPay, getPayResult } from '@/api/order'
 
 const route = useRoute()
 const router = useRouter()
-const orderNo = route.params.orderNo
-const order = ref(null)
+
+/**
+ * 支持一次支付多个子订单（跨商家拆单场景）
+ * 路由参数：/user/payment/:orderNo，多个订单号用英文逗号拼接
+ */
+const rawOrderNo = computed(() => String(route.params.orderNo || ''))
+const orderNos = ref([])
+const orders = ref([])
 const loading = ref(true)
 const payMethod = ref('mock')
 const payLoading = ref(false)
+let pollTimer = null
 
-async function fetchOrder() {
+const totalPayAmount = computed(() =>
+  orders.value.reduce((sum, o) => sum + Number(o.payAmount || o.totalAmount || 0), 0)
+)
+const totalPayAmountYuan = computed(() => totalPayAmount.value.toFixed(2))
+
+/** 拉取所有子订单详情 */
+async function fetchOrders() {
   loading.value = true
   try {
-    const res = await getOrderDetail(orderNo)
-    order.value = res.data
-    if (order.value && order.value.status !== 0) {
-      ElMessage.info('该订单无需支付')
-      router.replace({ name: 'OrderDetail', params: { orderNo } })
-    }
-  } catch { order.value = null } finally { loading.value = false }
-}
-
-async function handlePay() {
-  if (payLoading.value) return
-  if (payMethod.value === 'mock') {
-    try {
-      await ElMessageBox.confirm(`确认支付 ￥${order.value.payAmount || order.value.totalAmount} ？（模拟支付）`, '确认支付', { confirmButtonText: '确认', cancelButtonText: '取消' })
-    } catch { return }
-    payLoading.value = true
-    try {
-      // 后端需要 { orderNo, payMethod: 2 }
-      await mockPay({ orderNo, payMethod: 2 })
-      ElMessage.success('支付成功')
+    const results = await Promise.all(
+      orderNos.value.map((no) => getOrderDetail(no).then((r) => r.data).catch(() => null))
+    )
+    orders.value = results.filter(Boolean)
+    // 全部订单都已不是待支付 → 无需支付
+    if (orders.value.length > 0 && orders.value.every((o) => o.status !== 0)) {
+      ElMessage.info('订单无需支付')
       goOrderList()
-    } catch {} finally { payLoading.value = false }
-  } else {
-    ElMessage.info('微信支付功能开发中，请使用模拟支付')
+    }
+  } catch {
+    orders.value = []
+  } finally {
+    loading.value = false
   }
 }
 
-function copyOrderNo() {
-  navigator.clipboard.writeText(orderNo).then(() => { ElMessage.success('订单号已复制') }).catch(() => { ElMessage.error('复制失败') })
+/** 模拟支付：逐个支付所有待支付子订单，然后轮询支付结果 */
+async function handlePay() {
+  if (payLoading.value) return
+  if (payMethod.value === 'wx') {
+    ElMessage.info('微信支付需在服务端配置商户参数后可用，演示环境请使用模拟支付')
+    return
+  }
+  const amountText = `￥${totalPayAmountYuan.value}`
+  try {
+    await ElMessageBox.confirm(`确认支付 ${amountText}？（模拟支付）`, '确认支付', { confirmButtonText: '确认', cancelButtonText: '取消' })
+  } catch { return }
+
+  payLoading.value = true
+  try {
+    const pendingOrders = orders.value.filter((o) => o.status === 0)
+    // 逐个支付（演示环境模拟支付，真实环境这里改为微信预下单）
+    for (const order of pendingOrders) {
+      await mockPay({ orderNo: order.orderNo, payMethod: 2 })
+    }
+    // 轮询支付结果（最多10次，每次500ms）
+    const paid = await pollPayResult(pendingOrders.map((o) => o.orderNo))
+    if (paid) {
+      ElMessage.success('支付成功')
+      goOrderList()
+    } else {
+      ElMessage.warning('支付结果确认中，请稍后在订单列表查看')
+      goOrderList()
+    }
+  } catch {} finally { payLoading.value = false }
 }
-function goOrderDetail() { router.push({ name: 'OrderDetail', params: { orderNo } }) }
+
+/**
+ * 轮询支付结果
+ * @param {string[]} nos 订单号列表
+ * @returns {Promise<boolean>} 是否全部支付成功
+ */
+function pollPayResult(nos) {
+  let attempts = 0
+  return new Promise((resolve) => {
+    pollTimer = setInterval(async () => {
+      attempts += 1
+      try {
+        const results = await Promise.all(nos.map((no) => getPayResult(no)))
+        if (results.every((r) => r.data?.paid)) {
+          clearInterval(pollTimer)
+          resolve(true)
+          return
+        }
+      } catch { /* 轮询失败继续重试 */ }
+      if (attempts >= 10) {
+        clearInterval(pollTimer)
+        resolve(false)
+      }
+    }, 500)
+  })
+}
+
+function copyOrderNo(no) {
+  navigator.clipboard?.writeText(no)
+    .then(() => { ElMessage.success('订单号已复制') })
+    .catch(() => { ElMessage.error('复制失败') })
+}
+
 function goOrderList() { router.replace({ name: 'UserOrder' }) }
 
-onMounted(() => { fetchOrder() })
+onMounted(() => {
+  orderNos.value = rawOrderNo.value.split(',').map((s) => s.trim()).filter(Boolean)
+  if (orderNos.value.length === 0) {
+    loading.value = false
+    return
+  }
+  fetchOrders()
+})
+
+onBeforeUnmount(() => {
+  if (pollTimer) clearInterval(pollTimer)
+})
 </script>
 
 <style lang="scss" scoped>
@@ -108,7 +197,7 @@ onMounted(() => { fetchOrder() })
 .status-text { margin-top: 12px; font-size: 22px; font-weight: 700; color: #e6a23c; }
 .status-tip { margin-top: 8px; font-size: 13px; color: #909399; }
 .order-info { margin-bottom: 24px; padding: 16px 20px; background: #fafafa; border-radius: 8px; }
-.info-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+.info-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 14px; }
 .info-label { color: #909399; flex-shrink: 0; }
 .info-value { color: #303133; text-align: right; }
 .order-no { font-family: monospace; display: flex; align-items: center; gap: 8px; }

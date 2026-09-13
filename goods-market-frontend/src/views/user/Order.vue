@@ -4,7 +4,8 @@
     <el-tabs v-model="activeStatus" @tab-change="handleTabChange">
       <el-tab-pane label="全部" name="all" />
       <el-tab-pane label="待付款" name="0" />
-      <el-tab-pane label="已付款" name="1" />
+      <el-tab-pane label="待发货" name="1" />
+      <el-tab-pane label="待收货" name="4" />
       <el-tab-pane label="已完成" name="3" />
       <el-tab-pane label="已取消" name="2" />
     </el-tabs>
@@ -32,15 +33,14 @@
             <span class="item-price">￥{{ item.unitPrice }}</span>
           </div>
           <div class="order-footer">
-            <span class="order-total">共 {{ order.items?.length || 0 }} 件，合计：<strong>￥{{ order.totalAmount }}</strong></span>
+            <span class="order-total">共 {{ totalQuantity(order) }} 件，合计：<strong>￥{{ order.totalAmount }}</strong></span>
             <div class="order-actions">
               <template v-if="order.status === 0">
-                <el-button type="danger" size="small" :loading="payLoadingMap[order.orderNo]" @click="handlePay(order)">去支付</el-button>
+                <el-button type="danger" size="small" @click="goPay(order.orderNo)">去支付</el-button>
                 <el-button size="small" :loading="cancelLoadingMap[order.orderNo]" @click="handleCancel(order)">取消订单</el-button>
               </template>
-              <el-button v-if="order.status === 1" size="small" @click="goDetail(order.orderNo)">查看详情</el-button>
-              <el-button v-if="order.status === 3" type="primary" size="small" @click="goDetail(order.orderNo)">再次购买</el-button>
-              <el-button v-if="order.status === 2" size="small" @click="goDetail(order.orderNo)">查看详情</el-button>
+              <el-button v-if="order.status === 4" type="success" size="small" :loading="receiptLoadingMap[order.orderNo]" @click="handleReceipt(order)">确认收货</el-button>
+              <el-button v-if="[1, 2, 3, 4].includes(order.status)" size="small" @click="goDetail(order.orderNo)">查看详情</el-button>
             </div>
           </div>
         </div>
@@ -57,7 +57,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Picture } from '@element-plus/icons-vue'
-import { getOrderList, cancelOrder, mockPay } from '@/api/order'
+import { getOrderList, cancelOrder, confirmReceipt } from '@/api/order'
 
 const router = useRouter()
 const orderList = ref([])
@@ -66,12 +66,18 @@ const pageNum = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
 const activeStatus = ref('all')
-const payLoadingMap = reactive({})
 const cancelLoadingMap = reactive({})
+const receiptLoadingMap = reactive({})
 
-// 后端状态：0待支付 1已支付 2已取消 3已完成
-function statusText(s) { return { 0: '待付款', 1: '已付款', 2: '已取消', 3: '已完成' }[s] ?? '未知' }
-function statusTagType(s) { return { 0: 'warning', 1: 'primary', 2: 'info', 3: 'success' }[s] ?? 'info' }
+// 后端状态：0待支付 1已支付(待发货) 2已取消 3已完成 4已发货(待收货)
+const STATUS_TEXT = { 0: '待付款', 1: '待发货', 2: '已取消', 3: '已完成', 4: '待收货' }
+const STATUS_TAG = { 0: 'warning', 1: 'primary', 2: 'info', 3: 'success', 4: 'success' }
+function statusText(s) { return STATUS_TEXT[s] ?? '未知' }
+function statusTagType(s) { return STATUS_TAG[s] ?? 'info' }
+
+function totalQuantity(order) {
+  return (order.items || []).reduce((sum, item) => sum + (item.quantity || 0), 0)
+}
 
 async function fetchOrders() {
   loading.value = true
@@ -96,10 +102,19 @@ async function handleCancel(order) {
   catch {} finally { cancelLoadingMap[order.orderNo] = false }
 }
 
-async function handlePay(order) {
-  payLoadingMap[order.orderNo] = true
-  try { await mockPay({ orderNo: order.orderNo, payMethod: 2 }); ElMessage.success('支付成功'); fetchOrders() }
-  catch {} finally { payLoadingMap[order.orderNo] = false }
+/** 确认收货（仅已发货订单） */
+async function handleReceipt(order) {
+  try {
+    await ElMessageBox.confirm(`确认已收到订单 ${order.orderNo} 的商品？`, '确认收货', { confirmButtonText: '确认收货', cancelButtonText: '取消', type: 'info' })
+  } catch { return }
+  receiptLoadingMap[order.orderNo] = true
+  try { await confirmReceipt(order.orderNo); ElMessage.success('已确认收货'); fetchOrders() }
+  catch {} finally { receiptLoadingMap[order.orderNo] = false }
+}
+
+/** 去收银台支付 */
+function goPay(orderNo) {
+  router.push({ name: 'Payment', params: { orderNo } })
 }
 
 function goDetail(orderNo) { router.push({ name: 'OrderDetail', params: { orderNo } }) }

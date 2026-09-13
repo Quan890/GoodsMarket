@@ -1,6 +1,7 @@
 package com.market.goods.service;
 
 import com.market.goods.dto.MerchantApplyDTO;
+import com.market.goods.vo.MerchantStatsVO;
 import com.market.goods.vo.MerchantVO;
 
 /**
@@ -25,4 +26,12 @@ public interface MerchantService {
      * @return 商家信息视图（含审核状态描述）
      */
     MerchantVO getMyStatus(Long userId);
+
+    /**
+     * 商家经营统计（商家中心看板）
+     *
+     * @param userId 当前登录商家用户ID
+     * @return 统计数据 VO
+     */
+    MerchantStatsVO getMyStats(Long userId);
 }

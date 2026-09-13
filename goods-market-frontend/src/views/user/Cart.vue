@@ -14,19 +14,22 @@
         <span class="col-total">小计</span>
         <span class="col-action">操作</span>
       </div>
-      <div v-for="item in cartStore.cartList" :key="item.productId" class="cart-item">
-        <el-checkbox :model-value="item.checked" @change="cartStore.toggleCheck(item.productId)" />
+      <div v-for="item in cartStore.cartList" :key="item.productId" class="cart-item" :class="{ 'item-off-shelf': item.productStatus === 0 }">
+        <el-checkbox :model-value="item.checked" :disabled="item.productStatus === 0" @change="cartStore.toggleCheck(item.productId)" />
         <div class="item-info" @click="goDetail(item.productId)">
           <el-image :src="item.productImage" fit="cover" class="item-image">
             <template #error>
               <div class="image-placeholder"><el-icon size="24"><Picture /></el-icon></div>
             </template>
           </el-image>
-          <span class="item-name">{{ item.productName }}</span>
+          <div class="item-name-wrap">
+            <span class="item-name">{{ item.productName }}</span>
+            <el-tag v-if="item.productStatus === 0" type="info" size="small">已下架</el-tag>
+          </div>
         </div>
         <span class="item-price">￥{{ item.price }}</span>
         <div class="item-qty">
-          <el-input-number :model-value="item.quantity" :min="1" :max="item.stock" size="small" @change="(val) => handleQuantityChange(item.productId, val)" />
+          <el-input-number :model-value="item.quantity" :min="1" :max="item.stock > 0 ? item.stock : 1" :disabled="item.productStatus === 0" size="small" @change="(val) => handleQuantityChange(item.productId, val)" />
         </div>
         <span class="item-total">￥{{ (Number(item.price) * item.quantity).toFixed(2) }}</span>
         <el-button type="danger" link @click="handleRemove(item.productId)">删除</el-button>
@@ -87,6 +90,8 @@ function goDetail(productId) { router.push({ name: 'ProductDetail', params: { id
 .cart-header { display: flex; align-items: center; padding: 12px 16px; margin-bottom: 2px; background: #f5f7fa; border-radius: 4px; font-size: 13px; color: #909399; .col-info { flex: 1; margin-left: 16px; } .col-price { width: 100px; text-align: center; } .col-qty { width: 140px; text-align: center; } .col-total { width: 100px; text-align: center; } .col-action { width: 60px; text-align: center; } }
 .cart-item { display: flex; align-items: center; padding: 16px; margin-bottom: 2px; background: #fff; border-radius: 4px; transition: background 0.2s; &:hover { background: #fafafa; } }
 .item-info { flex: 1; display: flex; align-items: center; gap: 12px; margin-left: 16px; cursor: pointer; min-width: 0; }
+.item-name-wrap { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.item-off-shelf { opacity: 0.55; }
 .item-image { flex-shrink: 0; width: 80px; height: 80px; border-radius: 4px; overflow: hidden; background: #f5f7fa; }
 .image-placeholder { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #c0c4cc; }
 .item-name { font-size: 14px; color: #303133; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

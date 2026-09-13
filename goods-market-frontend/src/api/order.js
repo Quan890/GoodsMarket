@@ -5,18 +5,24 @@ import request from '@/utils/request'
  *
  * 对接后端 OrderController（/user/order + /pay）
  *
+ * 订单状态（与数据库 order.status 一致）：
+ *   0=待支付 1=已支付(待发货) 2=已取消 3=已完成 4=已发货(待收货)
+ *
  * 接口一览：
- *   POST  /user/order/create          → 创建订单
- *   GET   /user/order/list            → 我的订单列表（分页）
- *   GET   /user/order/detail/{orderNo} → 订单详情
- *   PUT   /user/order/cancel/{orderNo} → 取消订单
- *   POST  /user/order/mock-pay        → 模拟支付（开发调试用）
- *   POST  /user/order/wx-pay/{orderNo} → 唤起微信支付
- *   GET   /user/order/pay-result       → 查询支付结果
+ *   POST  /user/order/create            → 创建订单（跨商家返回多个订单号）
+ *   GET   /user/order/list              → 我的订单列表（分页）
+ *   GET   /user/order/detail/{orderNo}  → 订单详情
+ *   PUT   /user/order/cancel/{orderNo}  → 取消订单
+ *   PUT   /user/order/receipt/{orderNo} → 确认收货
+ *   GET   /user/order/pay-result/{orderNo} → 查询支付结果
+ *   POST  /user/order/mock-pay          → 模拟支付（开发调试用）
+ *   POST  /user/order/wx-pay/{orderNo}  → 唤起微信支付
  */
 
 /**
  * 创建订单
+ *
+ * 后端会按商家拆单：跨商家结算一次会生成多个子订单
  *
  * @param {Object}    data
  * @param {string}    data.receiverName    - 收货人姓名
@@ -24,15 +30,13 @@ import request from '@/utils/request'
  * @param {string}    data.receiverAddress - 收货地址
  * @param {string}    [data.remark]        - 订单备注
  * @param {Array}     data.items           - 商品明细列表
- * @param {number}    data.items[].productId - 商品 ID
+ * @param {number|string} data.items[].productId - 商品 ID
  * @param {number}    data.items[].quantity  - 购买数量
- * @returns {Promise<Result<string>>} 返回订单号 orderNo
+ * @returns {Promise<Result<string[]>>} 返回订单号列表
  *
  * @example
- *   createOrder({
- *     receiverName: '张三', receiverPhone: '13800138000', receiverAddress: '北京市朝阳区xxx',
- *     items: [{ productId: 1, quantity: 2 }]
- *   })
+ *   const res = await createOrder({...})
+ *   // res.data => ['GM202609...', 'GM202609...']（单商家为1个元素）
  */
 export function createOrder(data) {
   return request.post('/user/order/create', data)
@@ -44,7 +48,7 @@ export function createOrder(data) {
  * @param {Object}  params
  * @param {number}  [params.pageNum=1]    - 当前页码
  * @param {number}  [params.pageSize=10]  - 每页条数
- * @param {number}  [params.status]       - 订单状态筛选（0待付款 1已付款 2已发货 3已完成 4已取消）
+ * @param {number}  [params.status]       - 订单状态筛选（0待支付 1已支付 2已取消 3已完成 4已发货）
  * @returns {Promise<Result<PageResult<OrderVO>>>}
  *
  * @example
@@ -61,52 +65,51 @@ export function getOrderList(params) {
  * @returns {Promise<Result<OrderVO>>}
  *
  * @example
- *   getOrderDetail('202606151234567890')
+ *   getOrderDetail('GM2026061415301200000158')
  */
 export function getOrderDetail(orderNo) {
   return request.get(`/user/order/detail/${orderNo}`)
 }
 
 /**
- * 取消订单
+ * 取消订单（仅待支付状态可取消，取消后回滚库存）
  *
  * @param {string} orderNo - 订单号
  * @returns {Promise<Result<Void>>}
- *
- * @example
- *   cancelOrder('202606151234567890')
  */
 export function cancelOrder(orderNo) {
   return request.put(`/user/order/cancel/${orderNo}`)
 }
 
 /**
- * 模拟支付（开发调试用，生产环境隐藏）
+ * 确认收货（仅已发货状态可操作，确认后订单变为已完成）
+ *
+ * @param {string} orderNo - 订单号
+ * @returns {Promise<Result<Void>>}
+ */
+export function confirmReceipt(orderNo) {
+  return request.put(`/user/order/receipt/${orderNo}`)
+}
+
+/**
+ * 模拟支付（开发调试用，生产环境应下线）
  *
  * @param {Object}  data
  * @param {string}  data.orderNo   - 订单号
  * @param {number}  data.payMethod - 支付方式（1支付宝 2微信）
  * @returns {Promise<Result<Void>>}
- *
- * @example
- *   mockPay({ orderNo: '202606151234567890', payMethod: 2 })
  */
 export function mockPay(data) {
   return request.post('/user/order/mock-pay', data)
 }
 
 /**
- * 唤起微信支付
+ * 唤起微信支付（需后端配置真实商户参数）
  *
- * 调用后端生成微信支付预付单，返回前端调起支付所需的参数
+ * 调用后端生成微信支付 Native 预付单，返回 codeUrl 供扫码支付
  *
  * @param {string} orderNo - 订单号
- * @returns {Promise<Result<{appId, timeStamp, nonceStr, signType, paySign, prepayId}>>}
- *
- * @example
- *   createWxPayOrder('202606151234567890').then(res => {
- *     // 使用 res.data 调起微信支付 SDK
- *   })
+ * @returns {Promise<Result<{codeUrl: string, orderNo: string, payAmount: number}>>}
  */
 export function createWxPayOrder(orderNo) {
   return request.post(`/user/order/wx-pay/${orderNo}`)
@@ -118,12 +121,7 @@ export function createWxPayOrder(orderNo) {
  * 前端轮询此接口，确认支付是否成功
  *
  * @param {string} orderNo - 订单号
- * @returns {Promise<Result<{paid: boolean, status: number}>>}
- *
- * @example
- *   getPayResult('202606151234567890').then(res => {
- *     if (res.data.paid) { /* 跳转支付成功页 *​/ }
- *   })
+ * @returns {Promise<Result<{orderNo: string, status: number, statusDesc: string, paid: boolean}>>}
  */
 export function getPayResult(orderNo) {
   return request.get(`/user/order/pay-result/${orderNo}`)

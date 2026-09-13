@@ -68,7 +68,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessageBox } from 'element-plus'
 import { ShoppingCart, UserFilled, ArrowDown } from '@element-plus/icons-vue'
@@ -78,6 +78,19 @@ const route = useRoute()
 const router = useRouter()
 const userStore = useUserStore()
 const cartStore = useCartStore()
+
+// 登录后自动拉取购物车（保证顶栏徽标准确）；登出时清空本地购物车
+watch(
+  () => [userStore.isLoggedIn, userStore.userId],
+  ([loggedIn]) => {
+    if (loggedIn) {
+      cartStore.fetchCartList()
+    } else {
+      cartStore.clearCart()
+    }
+  },
+  { immediate: true }
+)
 
 /**
  * 是否显示全局顶栏

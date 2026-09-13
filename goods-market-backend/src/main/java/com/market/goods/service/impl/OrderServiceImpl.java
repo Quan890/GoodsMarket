@@ -1,7 +1,7 @@
 package com.market.goods.service.impl;
 
-import cn.hutool.json.JSONUtil;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.market.goods.dto.CreateOrderDTO;
@@ -12,6 +12,7 @@ import com.market.goods.exception.BusinessException;
 import com.market.goods.mapper.*;
 import com.market.goods.service.OrderService;
 import com.market.goods.util.OrderNoUtil;
+import com.market.goods.util.OrderItemFiller;
 import com.market.goods.util.PageUtil;
 import com.market.goods.util.PageUtil.PageResult;
 import com.market.goods.util.WxPayV3Util;
@@ -33,6 +34,8 @@ import java.util.*;
  * 本类是项目核心模块，涉及：
  *   - @Transactional 事务一致性（扣库存 + 创建订单 + 清购物车 原子操作）
  *   - @Version 乐观锁防超卖（多用户同时抢购同一商品时保证库存正确性）
+ *   - 跨商家拆单（购物车结算的商品可能来自多个商家，按商家拆分为多个子订单）
+ *   - 订单状态机（待支付 → 已支付 → 已发货 → 已完成，任意状态可条件更新防并发）
  *   - 微信支付V3集成（预下单 + 异步回调验签 + 幂等处理）
  *
  * @author goods-market
@@ -48,6 +51,7 @@ public class OrderServiceImpl implements OrderService {
     private final CartMapper cartMapper;
     private final MerchantMapper merchantMapper;
     private final WxPayV3Util wxPayV3Util;
+    private final OrderItemFiller orderItemFiller;
 
     @Value("${wechat.pay.notify-url}")
     private String wxPayNotifyUrl;
@@ -58,122 +62,128 @@ public class OrderServiceImpl implements OrderService {
      * ============================================================
      * 事务边界：@Transactional 保证以下操作要么全部成功，要么全部回滚
      *   操作1: 乐观锁扣减商品库存（UPDATE ... WHERE version = ?）
-     *   操作2: 新增订单主记录（INSERT INTO order）
+     *   操作2: 按商家拆分新增订单主记录（INSERT INTO order）
      *   操作3: 批量新增订单明细（INSERT INTO order_item × N）
      *   操作4: 清空用户选中的购物车条目（逻辑删除）
      * ============================================================
      *
+     * 拆单规则：一次结算的商品可能来自多个商家，每个商家生成一个独立子订单，
+     *          各子订单金额只包含本商家的商品，商家只能看到自己店铺的订单。
+     *
      * 并发防超卖原理：
-     *   - 每个商品有 version 字段，初始值为 0
-     *   - 扣减库存时 SQL 为：UPDATE product SET stock=stock-1, version=version+1 WHERE id=? AND version=0
-     *   - 如果两个请求同时读到 version=0，只有一个能更新成功（影响行数=1）
-     *   - 另一个请求影响行数=0，业务层捕获后提示"库存不足，请重试"
-     *   - 这就是乐观锁：不加数据库锁，通过版本号检测冲突
+     *   - 每个商品有 version 字段，扣减时 SQL 为：
+     *     UPDATE product SET stock=stock-?, version=version+1 WHERE id=? AND version=? AND stock>=?
+     *   - 并发冲突时影响行数=0，业务层抛出"库存不足，请重试"，整个事务回滚
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
-    public String createOrder(Long userId, CreateOrderDTO dto) {
-        List<CreateOrderDTO.OrderItemDTO> items = dto.getItems();
+    public List<String> createOrder(Long userId, CreateOrderDTO dto) {
+        List<CreateOrderDTO.OrderItemDTO> rawItems = dto.getItems();
+
+        // ==================== 0. 合并重复商品（同一商品多条明细合并数量） ====================
+        Map<Long, Integer> quantityByProduct = new LinkedHashMap<>();
+        for (CreateOrderDTO.OrderItemDTO item : rawItems) {
+            quantityByProduct.merge(item.getProductId(), item.getQuantity(), Integer::sum);
+        }
 
         // ==================== 1. 校验商品并扣减库存 ====================
-        // 用列表收集扣减结果，便于回滚时恢复已扣减的库存
-        List<Product> deductedProducts = new ArrayList<>();
+        // 商品按商家分组：merchantId -> 该商家的商品明细；productMap 缓存商品快照
+        Map<Long, List<CreateOrderDTO.OrderItemDTO>> itemsByMerchant = new LinkedHashMap<>();
+        Map<Long, Product> productMap = new HashMap<>();
 
-        for (CreateOrderDTO.OrderItemDTO item : items) {
+        for (Map.Entry<Long, Integer> entry : quantityByProduct.entrySet()) {
+            Long productId = entry.getKey();
+            int quantity = entry.getValue();
+
             // 查询商品快照（当前库存和版本号）
-            Product product = productMapper.selectById(item.getProductId());
+            Product product = productMapper.selectById(productId);
             if (product == null) {
-                throw new BusinessException("商品不存在：" + item.getProductId());
+                throw new BusinessException("商品不存在：" + productId);
             }
             if (product.getStatus() != 1) {
                 throw new BusinessException("商品已下架：" + product.getName());
             }
-            if (product.getStock() < item.getQuantity()) {
+            if (product.getStock() < quantity) {
                 throw new BusinessException("商品库存不足：" + product.getName()
                         + "，库存仅剩 " + product.getStock() + " 件");
             }
 
             // ★ 乐观锁扣减库存 ★
-            // 执行 SQL: UPDATE product SET stock=stock-?, sales=sales+?, version=version+1
-            //           WHERE id=? AND version=? AND deleted=0 AND stock>=?
             // 返回影响行数：1=成功，0=版本冲突或库存不足
-            int affected = productMapper.deductStock(
-                    product.getId(),
-                    item.getQuantity(),
-                    product.getVersion()     // 传入当前版本号，WHERE 条件匹配
-            );
+            int affected = productMapper.deductStock(product.getId(), quantity, product.getVersion());
             if (affected == 0) {
                 // ★ 并发冲突：其他请求已修改了该商品的 version ★
-                throw new BusinessException("商品库存扣减失败（并发冲突），请重试：" + product.getName());
+                throw new BusinessException("商品下单繁忙，请重试：" + product.getName());
             }
 
-            // 记录扣减成功的商品（用于异常回滚时恢复库存）
-            product.setStock(product.getStock() - item.getQuantity());
-            deductedProducts.add(product);
+            // 按商家归组
+            productMap.put(productId, product);
+            CreateOrderDTO.OrderItemDTO merged = new CreateOrderDTO.OrderItemDTO();
+            merged.setProductId(productId);
+            merged.setQuantity(quantity);
+            itemsByMerchant.computeIfAbsent(product.getMerchantId(), k -> new ArrayList<>()).add(merged);
         }
 
-        // ==================== 2. 生成订单号并创建订单主记录 ====================
-        String orderNo = OrderNoUtil.generate();
+        // ==================== 2. 按商家拆分创建订单 ====================
+        List<String> orderNos = new ArrayList<>();
+        for (Map.Entry<Long, List<CreateOrderDTO.OrderItemDTO>> merchantEntry : itemsByMerchant.entrySet()) {
+            Long merchantId = merchantEntry.getKey();
+            List<CreateOrderDTO.OrderItemDTO> merchantItems = merchantEntry.getValue();
 
-        // 计算订单总金额
-        BigDecimal totalAmount = BigDecimal.ZERO;
-        for (int i = 0; i < items.size(); i++) {
-            Product product = deductedProducts.get(i);
-            BigDecimal itemTotal = product.getPrice().multiply(BigDecimal.valueOf(items.get(i).getQuantity()));
-            totalAmount = totalAmount.add(itemTotal);
+            // 计算本商家订单总金额
+            BigDecimal totalAmount = BigDecimal.ZERO;
+            for (CreateOrderDTO.OrderItemDTO item : merchantItems) {
+                Product product = productMap.get(item.getProductId());
+                totalAmount = totalAmount.add(
+                        product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity())));
+            }
+
+            // 创建订单主记录
+            String orderNo = OrderNoUtil.generate();
+            Order order = new Order();
+            order.setOrderNo(orderNo);
+            order.setUserId(userId);
+            order.setMerchantId(merchantId);
+            order.setTotalAmount(totalAmount);
+            order.setPayAmount(totalAmount);       // 暂不扣减优惠，实付=总金额
+            order.setStatus(OrderStatusEnum.UNPAID.getCode());
+            order.setReceiverName(dto.getReceiverName());
+            order.setReceiverPhone(dto.getReceiverPhone());
+            order.setReceiverAddress(dto.getReceiverAddress());
+            order.setRemark(dto.getRemark());
+            orderMapper.insert(order);
+
+            // 创建订单明细（商品信息快照）
+            for (CreateOrderDTO.OrderItemDTO item : merchantItems) {
+                Product product = productMap.get(item.getProductId());
+
+                OrderItem orderItem = new OrderItem();
+                orderItem.setOrderId(order.getId());
+                orderItem.setOrderNo(orderNo);
+                orderItem.setProductId(product.getId());
+                orderItem.setProductName(product.getName());              // 商品名称快照
+                orderItem.setProductImage(product.getMainImage());        // 商品图片快照
+                orderItem.setUnitPrice(product.getPrice());               // 下单时单价快照
+                orderItem.setQuantity(item.getQuantity());
+                orderItem.setTotalPrice(
+                        product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity()))
+                );
+                orderItemMapper.insert(orderItem);
+            }
+
+            orderNos.add(orderNo);
         }
 
-        // 确定商家ID（一个订单对应一个商家，取第一个商品的商家ID）
-        Long merchantId = deductedProducts.get(0).getMerchantId();
-
-        Order order = new Order();
-        order.setOrderNo(orderNo);
-        order.setUserId(userId);
-        order.setMerchantId(merchantId);
-        order.setTotalAmount(totalAmount);
-        order.setPayAmount(totalAmount);       // 暂不扣减优惠，实付=总金额
-        order.setStatus(OrderStatusEnum.UNPAID.getCode());
-        order.setReceiverName(dto.getReceiverName());
-        order.setReceiverPhone(dto.getReceiverPhone());
-        order.setReceiverAddress(dto.getReceiverAddress());
-        order.setRemark(dto.getRemark());
-        orderMapper.insert(order);
-
-        // ==================== 3. 批量新增订单明细 ====================
-        for (int i = 0; i < items.size(); i++) {
-            CreateOrderDTO.OrderItemDTO item = items.get(i);
-            Product product = deductedProducts.get(i);
-
-            OrderItem orderItem = new OrderItem();
-            orderItem.setOrderId(order.getId());
-            orderItem.setOrderNo(orderNo);
-            orderItem.setProductId(product.getId());
-            orderItem.setProductName(product.getName());              // 商品名称快照
-            orderItem.setProductImage(product.getMainImage());        // 商品图片快照
-            orderItem.setUnitPrice(product.getPrice());               // 下单时单价快照
-            orderItem.setQuantity(item.getQuantity());
-            orderItem.setTotalPrice(
-                    product.getPrice().multiply(BigDecimal.valueOf(item.getQuantity()))
-            );
-            orderItemMapper.insert(orderItem);
-        }
-
-        // ==================== 4. 清空用户选中的购物车条目 ====================
+        // ==================== 3. 清空用户选中的购物车条目 ====================
         // 删除购物车中已下单的商品（逻辑删除）
-        for (CreateOrderDTO.OrderItemDTO item : items) {
-            Cart cart = cartMapper.selectOne(
-                    new LambdaQueryWrapper<Cart>()
-                            .eq(Cart::getUserId, userId)
-                            .eq(Cart::getProductId, item.getProductId())
-            );
-            if (cart != null) {
-                cartMapper.deleteById(cart.getId());
-            }
+        for (Long productId : quantityByProduct.keySet()) {
+            cartMapper.delete(new LambdaUpdateWrapper<Cart>()
+                    .eq(Cart::getUserId, userId)
+                    .eq(Cart::getProductId, productId));
         }
 
-        log.info("订单创建成功：orderNo={}, userId={}, totalAmount={}, items={}",
-                orderNo, userId, totalAmount, items.size());
-        return orderNo;
+        log.info("订单创建成功：orderNos={}, userId={}, 商家数={}", orderNos, userId, orderNos.size());
+        return orderNos;
     }
 
     /**
@@ -184,7 +194,8 @@ public class OrderServiceImpl implements OrderService {
         Page<OrderVO> page = PageUtil.buildPage(pageNum, pageSize);
         IPage<OrderVO> result = orderMapper.selectOrderPageWithMerchant(page, userId, status);
 
-        // 填充状态描述（前端直接展示中文）
+        // 填充商品明细（列表页展示商品缩略图与件数）+ 状态描述（前端直接展示中文）
+        orderItemFiller.fill(result.getRecords());
         result.getRecords().forEach(this::fillStatusDesc);
         return PageUtil.toPageResult(result);
     }
@@ -221,7 +232,7 @@ public class OrderServiceImpl implements OrderService {
      *
      * 条件：仅待支付(0)状态可取消
      * 事务内操作：
-     *   1. 修改订单状态为已取消(2)
+     *   1. 条件更新订单状态为已取消（WHERE status=0，防止与支付并发冲突）
      *   2. 回滚商品库存（乐观锁恢复）
      */
     @Override
@@ -237,45 +248,130 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException("订单不存在");
         }
 
-        // 2. 校验订单状态（仅待支付可取消）
-        if (!OrderStatusEnum.canPay(order.getStatus())) {
+        // 2. 条件更新：仅当订单仍处于待支付时取消（防止与支付回调并发）
+        int affected = orderMapper.update(null,
+                new LambdaUpdateWrapper<Order>()
+                        .set(Order::getStatus, OrderStatusEnum.CANCELLED.getCode())
+                        .eq(Order::getOrderNo, orderNo)
+                        .eq(Order::getUserId, userId)
+                        .eq(Order::getStatus, OrderStatusEnum.UNPAID.getCode()));
+        if (affected == 0) {
             throw new BusinessException("当前订单状态不允许取消，状态："
                     + OrderStatusEnum.ofCode(order.getStatus()).getDesc());
         }
 
-        // 3. 修改订单状态为已取消
-        order.setStatus(OrderStatusEnum.CANCELLED.getCode());
-        orderMapper.updateById(order);
-
-        // 4. 回滚商品库存（乐观锁恢复）
-        List<OrderItem> orderItems = orderItemMapper.selectList(
-                new LambdaQueryWrapper<OrderItem>()
-                        .eq(OrderItem::getOrderNo, orderNo)
-        );
-        for (OrderItem item : orderItems) {
-            Product product = productMapper.selectById(item.getProductId());
-            if (product != null) {
-                // ★ 乐观锁恢复库存 ★
-                int affected = productMapper.restoreStock(
-                        product.getId(),
-                        item.getQuantity(),
-                        product.getVersion()
-                );
-                if (affected == 0) {
-                    log.warn("库存回滚失败（并发冲突），需人工处理：productId={}, quantity={}",
-                            item.getProductId(), item.getQuantity());
-                }
-            }
-        }
+        // 3. 回滚商品库存（乐观锁恢复）
+        rollbackOrderStock(orderNo);
 
         log.info("订单已取消：orderNo={}, userId={}", orderNo, userId);
+    }
+
+    /**
+     * 商家发货
+     *
+     * 条件：订单属于当前商家且状态为已支付(1)
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void shipOrder(Long userId, String orderNo) {
+        // 1. 校验当前用户是商家且订单属于该商家
+        Merchant merchant = merchantMapper.selectOne(
+                new LambdaQueryWrapper<Merchant>().eq(Merchant::getUserId, userId));
+        if (merchant == null) {
+            throw new BusinessException("商家信息不存在，请先完成入驻申请");
+        }
+
+        Order order = orderMapper.selectOne(
+                new LambdaQueryWrapper<Order>().eq(Order::getOrderNo, orderNo));
+        if (order == null) {
+            throw new BusinessException("订单不存在");
+        }
+        if (!merchant.getId().equals(order.getMerchantId())) {
+            throw new BusinessException("无权操作其他店铺的订单");
+        }
+        if (!OrderStatusEnum.canShip(order.getStatus())) {
+            throw new BusinessException("当前订单状态不允许发货，状态："
+                    + OrderStatusEnum.ofCode(order.getStatus()).getDesc());
+        }
+
+        // 2. 条件更新为已发货（WHERE status=1）
+        int affected = orderMapper.update(null,
+                new LambdaUpdateWrapper<Order>()
+                        .set(Order::getStatus, OrderStatusEnum.SHIPPED.getCode())
+                        .eq(Order::getOrderNo, orderNo)
+                        .eq(Order::getStatus, OrderStatusEnum.PAID.getCode()));
+        if (affected == 0) {
+            throw new BusinessException("发货失败，订单状态已变化，请刷新后重试");
+        }
+
+        log.info("订单已发货：orderNo={}, merchantId={}", orderNo, merchant.getId());
+    }
+
+    /**
+     * 用户确认收货
+     *
+     * 条件：订单属于当前用户且状态为已发货(4)
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void confirmReceipt(Long userId, String orderNo) {
+        Order order = orderMapper.selectOne(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getOrderNo, orderNo)
+                        .eq(Order::getUserId, userId)
+        );
+        if (order == null) {
+            throw new BusinessException("订单不存在");
+        }
+        if (!OrderStatusEnum.canReceipt(order.getStatus())) {
+            throw new BusinessException("当前订单状态不允许确认收货，状态："
+                    + OrderStatusEnum.ofCode(order.getStatus()).getDesc());
+        }
+
+        int affected = orderMapper.update(null,
+                new LambdaUpdateWrapper<Order>()
+                        .set(Order::getStatus, OrderStatusEnum.COMPLETED.getCode())
+                        .eq(Order::getOrderNo, orderNo)
+                        .eq(Order::getUserId, userId)
+                        .eq(Order::getStatus, OrderStatusEnum.SHIPPED.getCode()));
+        if (affected == 0) {
+            throw new BusinessException("确认收货失败，订单状态已变化，请刷新后重试");
+        }
+
+        log.info("订单已确认收货：orderNo={}, userId={}", orderNo, userId);
+    }
+
+    /**
+     * 查询订单支付结果（前端支付后轮询使用）
+     */
+    @Override
+    public Map<String, Object> getPayResult(Long userId, String orderNo) {
+        Order order = orderMapper.selectOne(
+                new LambdaQueryWrapper<Order>()
+                        .eq(Order::getOrderNo, orderNo)
+                        .eq(Order::getUserId, userId)
+        );
+        if (order == null) {
+            throw new BusinessException("订单不存在");
+        }
+
+        OrderStatusEnum statusEnum = OrderStatusEnum.ofCode(order.getStatus());
+        Map<String, Object> result = new HashMap<>();
+        result.put("orderNo", order.getOrderNo());
+        result.put("status", order.getStatus());
+        result.put("statusDesc", statusEnum != null ? statusEnum.getDesc() : "未知");
+        boolean paid = order.getStatus() == OrderStatusEnum.PAID.getCode()
+                || order.getStatus() == OrderStatusEnum.SHIPPED.getCode()
+                || order.getStatus() == OrderStatusEnum.COMPLETED.getCode();
+        result.put("paid", paid);
+        return result;
     }
 
     /**
      * 模拟支付（演示调试用）
      *
      * 直接将订单状态从待支付(0)改为已支付(1)，设置支付时间和方式
-     * 生产环境应移除此接口
+     * 条件更新防并发：仅 status=0 时可支付，重复支付/已取消订单会失败
      */
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -293,10 +389,18 @@ public class OrderServiceImpl implements OrderService {
                     + OrderStatusEnum.ofCode(order.getStatus()).getDesc());
         }
 
-        order.setStatus(OrderStatusEnum.PAID.getCode());
-        order.setPayTime(LocalDateTime.now());
-        order.setPayMethod(dto.getPayMethod());
-        orderMapper.updateById(order);
+        // 条件更新：仅待支付状态可支付（幂等，防重复回调/重复点击）
+        int affected = orderMapper.update(null,
+                new LambdaUpdateWrapper<Order>()
+                        .set(Order::getStatus, OrderStatusEnum.PAID.getCode())
+                        .set(Order::getPayTime, LocalDateTime.now())
+                        .set(Order::getPayMethod, dto.getPayMethod())
+                        .eq(Order::getOrderNo, dto.getOrderNo())
+                        .eq(Order::getUserId, userId)
+                        .eq(Order::getStatus, OrderStatusEnum.UNPAID.getCode()));
+        if (affected == 0) {
+            throw new BusinessException("支付失败，订单状态已变化，请刷新后重试");
+        }
 
         log.info("【模拟支付】订单已支付：orderNo={}, payMethod={}", dto.getOrderNo(), dto.getPayMethod());
     }
@@ -391,13 +495,19 @@ public class OrderServiceImpl implements OrderService {
                 }
             }
 
-            // 6. 修改订单状态为已支付
-            order.setStatus(OrderStatusEnum.PAID.getCode());
-            order.setPayTime(LocalDateTime.now());
-            order.setPayMethod(2);     // 微信支付
-            orderMapper.updateById(order);
-
-            log.info("微信支付回调处理成功，订单已支付：orderNo={}", orderNo);
+            // 6. 条件更新为已支付（仅 SUCCESS 且仍处于待支付状态）
+            if (!"SUCCESS".equals(tradeState)) {
+                log.warn("微信回调交易状态非SUCCESS，不更新订单：orderNo={}, tradeState={}", orderNo, tradeState);
+                return "SUCCESS";
+            }
+            int affected = orderMapper.update(null,
+                    new LambdaUpdateWrapper<Order>()
+                            .set(Order::getStatus, OrderStatusEnum.PAID.getCode())
+                            .set(Order::getPayTime, LocalDateTime.now())
+                            .set(Order::getPayMethod, 2)     // 微信支付
+                            .eq(Order::getOrderNo, orderNo)
+                            .eq(Order::getStatus, OrderStatusEnum.UNPAID.getCode()));
+            log.info("微信支付回调处理{}：orderNo={}", affected > 0 ? "成功" : "重复跳过", orderNo);
             return "SUCCESS";
 
         } catch (Exception e) {
@@ -411,11 +521,8 @@ public class OrderServiceImpl implements OrderService {
      *
      * 执行逻辑：
      *   1. 查询所有待支付且创建超过30分钟的订单
-     *   2. 批量修改状态为已取消
-     *   3. 逐个回滚商品库存（乐观锁）
-     *
-     * 使用方式：在启动类或配置类上添加 @EnableScheduling
-     *          本方法上添加 @Scheduled(cron = "0 * /5 * * * ?")
+     *   2. 条件更新（WHERE status=0）为已取消，防止与用户支付并发冲突
+     *   3. 更新成功的订单回滚商品库存（乐观锁）
      */
     @Override
     public void closeTimeoutOrders() {
@@ -435,25 +542,18 @@ public class OrderServiceImpl implements OrderService {
 
         for (Order order : timeoutOrders) {
             try {
-                // 修改订单状态为已取消
-                order.setStatus(OrderStatusEnum.CANCELLED.getCode());
-                orderMapper.updateById(order);
+                // 条件更新：仅当订单仍是待支付时关闭（用户可能恰好在此时完成支付）
+                int affected = orderMapper.update(null,
+                        new LambdaUpdateWrapper<Order>()
+                                .set(Order::getStatus, OrderStatusEnum.CANCELLED.getCode())
+                                .eq(Order::getId, order.getId())
+                                .eq(Order::getStatus, OrderStatusEnum.UNPAID.getCode()));
+                if (affected == 0) {
+                    continue;   // 状态已变化（如用户刚支付），跳过
+                }
 
                 // 回滚商品库存
-                List<OrderItem> items = orderItemMapper.selectList(
-                        new LambdaQueryWrapper<OrderItem>()
-                                .eq(OrderItem::getOrderNo, order.getOrderNo())
-                );
-                for (OrderItem item : items) {
-                    Product product = productMapper.selectById(item.getProductId());
-                    if (product != null) {
-                        productMapper.restoreStock(
-                                product.getId(),
-                                item.getQuantity(),
-                                product.getVersion()
-                        );
-                    }
-                }
+                rollbackOrderStock(order.getOrderNo());
                 log.info("定时任务：已关闭超时订单 orderNo={}", order.getOrderNo());
             } catch (Exception e) {
                 log.error("定时任务：关闭订单失败 orderNo={}, error={}", order.getOrderNo(), e.getMessage());
@@ -462,6 +562,31 @@ public class OrderServiceImpl implements OrderService {
     }
 
     // ==================== 私有方法 ====================
+
+    /**
+     * 回滚订单中所有商品的库存（乐观锁恢复）
+     */
+    private void rollbackOrderStock(String orderNo) {
+        List<OrderItem> orderItems = orderItemMapper.selectList(
+                new LambdaQueryWrapper<OrderItem>()
+                        .eq(OrderItem::getOrderNo, orderNo)
+        );
+        for (OrderItem item : orderItems) {
+            Product product = productMapper.selectById(item.getProductId());
+            if (product != null) {
+                // ★ 乐观锁恢复库存 ★
+                int affected = productMapper.restoreStock(
+                        product.getId(),
+                        item.getQuantity(),
+                        product.getVersion()
+                );
+                if (affected == 0) {
+                    log.warn("库存回滚失败（并发冲突），需人工处理：productId={}, quantity={}",
+                            item.getProductId(), item.getQuantity());
+                }
+            }
+        }
+    }
 
     /**
      * 填充订单状态描述和支付方式描述

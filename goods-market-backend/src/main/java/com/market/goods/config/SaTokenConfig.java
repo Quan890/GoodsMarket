@@ -62,6 +62,11 @@ public class SaTokenConfig implements WebMvcConfigurer {
                         StpUtil.checkRoleOr("user", "merchant", "admin");
                     });
 
+            // ==================== 通用上传接口 ====================
+            // /upload/** 需要登录（商家上传商品图、用户上传头像等）
+            SaRouter.match("/upload/**")
+                    .check(r -> StpUtil.checkLogin());
+
             // ==================== 公开接口（无需登录） ====================
             // /public/**、/pay/wx/notify 等回调地址不做拦截
             // （默认不匹配的路径不拦截，如需强制登录可在此补充）

@@ -109,8 +109,8 @@ export function getPendingMerchants(params) {
  * @returns {Promise<Result<Void>>}
  *
  * @example
- *   auditMerchant({ merchantId: 101, auditStatus: 1 })           // 通过
- *   auditMerchant({ merchantId: 102, auditStatus: 2, reason: '信息不完整' })  // 驳回
+ *   auditMerchant({ merchantId: 101, auditStatus: 1 })  // 通过
+ *   auditMerchant({ merchantId: 102, auditStatus: 2, auditRemark: '信息不完整' })  // 驳回
  */
 export function auditMerchant(data) {
   return request.put('/admin/merchant/audit', data)

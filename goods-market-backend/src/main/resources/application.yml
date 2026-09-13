@@ -82,6 +82,11 @@ sa-token:
   # token 前缀（用于 Authorization: Bearer xxx）
   token-prefix: Bearer
 
+# ==================== 文件上传配置 ====================
+app:
+  # 图片上传保存目录（相对路径基于后端项目根目录，也可配置为绝对路径）
+  upload-dir: uploads/images
+
 # ==================== 阿里云短信配置（占位） ====================
 aliyun:
   sms:

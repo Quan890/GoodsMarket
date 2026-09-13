@@ -155,7 +155,7 @@ export function getMyProducts(params) {
  * @param {Object}  params
  * @param {number}  [params.pageNum=1]    - 当前页码
  * @param {number}  [params.pageSize=10]  - 每页条数
- * @param {number}  [params.status]       - 订单状态筛选（0待付款 1已付款 2已发货 3已完成 4已取消）
+ * @param {number}  [params.status]       - 订单状态筛选（0待支付 1已支付 2已取消 3已完成 4已发货）
  * @returns {Promise<Result<PageResult<OrderVO>>>}
  *
  * @example
@@ -163,4 +163,28 @@ export function getMyProducts(params) {
  */
 export function getMyProductOrders(params) {
   return request.get('/merchant/product/orders', { params })
+}
+
+/**
+ * 商家发货
+ *
+ * 将本店铺已支付(1)的订单标记为已发货(4)
+ *
+ * @param {string} orderNo - 订单号
+ * @returns {Promise<Result<Void>>}
+ */
+export function shipOrder(orderNo) {
+  return request.put(`/merchant/order/ship/${orderNo}`)
+}
+
+// ==================== 经营统计 ====================
+
+/**
+ * 商家经营统计（商家中心看板）
+ *
+ * @returns {Promise<Result<{totalProducts, onSaleProducts, totalOrders, todayOrders,
+ *   pendingShipOrders, shippedOrders, completedOrders, totalSales, todaySales}>>}
+ */
+export function getMerchantStats() {
+  return request.get('/merchant/stats')
 }

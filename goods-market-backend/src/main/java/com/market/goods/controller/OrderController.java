@@ -14,6 +14,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -54,16 +55,17 @@ public class OrderController {
      *
      * 事务内核心流程：
      *   1. 乐观锁扣减库存（防超卖）
-     *   2. 创建订单主记录 + 明细记录
-     *   3. 清理购物车
+     *   2. 按商家拆分订单（跨商家结算生成多个子订单）
+     *   3. 创建订单主记录 + 明细记录
+     *   4. 清理购物车
      *   任意异常整体回滚
      */
-    @Operation(summary = "创建订单", description = "提交订单，乐观锁扣减库存，事务保证一致性")
+    @Operation(summary = "创建订单", description = "提交订单，按商家拆单，乐观锁扣减库存，事务保证一致性")
     @PostMapping("/user/order/create")
-    public Result<String> createOrder(@Valid @RequestBody CreateOrderDTO dto) {
+    public Result<List<String>> createOrder(@Valid @RequestBody CreateOrderDTO dto) {
         long userId = StpUtil.getLoginIdAsLong();
-        String orderNo = orderService.createOrder(userId, dto);
-        return Result.ok(orderNo, "下单成功");
+        List<String> orderNos = orderService.createOrder(userId, dto);
+        return Result.ok(orderNos, "下单成功");
     }
 
     /**
@@ -121,7 +123,54 @@ public class OrderController {
         return Result.ok(null, "订单已取消");
     }
 
+    /**
+     * 商家发货
+     *
+     * 权限：需要登录 + 商家/管理员角色（/merchant/** 路径由拦截器校验角色）
+     * 请求：PUT /api/merchant/order/ship/GM2026061415301200000158
+     *
+     * 条件：订单属于当前商家且状态为已支付(1)
+     */
+    @Operation(summary = "商家发货", description = "商家将已支付订单标记为已发货")
+    @PutMapping("/merchant/order/ship/{orderNo}")
+    public Result<Void> shipOrder(@PathVariable String orderNo) {
+        long userId = StpUtil.getLoginIdAsLong();
+        orderService.shipOrder(userId, orderNo);
+        return Result.ok(null, "发货成功");
+    }
+
+    /**
+     * 用户确认收货
+     *
+     * 权限：需要登录（user/merchant/admin）
+     * 请求：PUT /api/user/order/receipt/GM2026061415301200000158
+     *
+     * 条件：订单属于当前用户且状态为已发货(4)，确认后变为已完成(3)
+     */
+    @Operation(summary = "确认收货", description = "用户确认收货，订单变为已完成")
+    @PutMapping("/user/order/receipt/{orderNo}")
+    public Result<Void> confirmReceipt(@PathVariable String orderNo) {
+        long userId = StpUtil.getLoginIdAsLong();
+        orderService.confirmReceipt(userId, orderNo);
+        return Result.ok(null, "确认收货成功");
+    }
+
     // ==================== 支付接口 ====================
+
+    /**
+     * 查询订单支付结果（支付后轮询使用）
+     *
+     * 权限：需要登录（user/merchant/admin）
+     * 请求：GET /api/user/order/pay-result/GM2026061415301200000158
+     *
+     * 返回：{ orderNo, status, statusDesc, paid }
+     */
+    @Operation(summary = "支付结果查询", description = "查询订单支付状态，前端支付后轮询使用")
+    @GetMapping("/user/order/pay-result/{orderNo}")
+    public Result<Map<String, Object>> getPayResult(@PathVariable String orderNo) {
+        long userId = StpUtil.getLoginIdAsLong();
+        return Result.ok(orderService.getPayResult(userId, orderNo));
+    }
 
     /**
      * 模拟支付（演示调试用）

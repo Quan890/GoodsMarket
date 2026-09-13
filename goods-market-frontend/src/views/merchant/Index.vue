@@ -33,6 +33,16 @@
       </el-descriptions>
     </el-card>
 
+    <!-- 经营统计 -->
+    <el-row v-if="stats" :gutter="16">
+      <el-col :span="6" v-for="card in statCards" :key="card.label">
+        <el-card class="stat-card" shadow="never">
+          <div class="stat-value" :style="{ color: card.color }">{{ card.value }}</div>
+          <div class="stat-label">{{ card.label }}</div>
+        </el-card>
+      </el-col>
+    </el-row>
+
     <!-- 快捷操作 -->
     <div class="action-grid">
       <el-card class="action-card" shadow="hover" @click="router.push({ name: 'MerchantProduct' })">
@@ -77,12 +87,13 @@ import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Goods, List, Promotion } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores'
-import { getMerchantStatus } from '@/api/merchant'
+import { getMerchantStatus, getMerchantStats } from '@/api/merchant'
 
 const router = useRouter()
 const userStore = useUserStore()
 
 const merchantInfo = ref(null)
+const stats = ref(null)
 const loading = ref(false)
 
 const AUDIT_MAP = {
@@ -94,11 +105,31 @@ const AUDIT_MAP = {
 const auditStatusText = computed(() => AUDIT_MAP[merchantInfo.value?.auditStatus]?.text ?? '未知')
 const auditTagType = computed(() => AUDIT_MAP[merchantInfo.value?.auditStatus]?.tagType ?? 'info')
 
+/** 统计卡片配置 */
+const statCards = computed(() => {
+  const s = stats.value || {}
+  return [
+    { label: '累计销售额(元)', value: Number(s.totalSales || 0).toFixed(2), color: '#f56c6c' },
+    { label: '今日销售额(元)', value: Number(s.todaySales || 0).toFixed(2), color: '#f56c6c' },
+    { label: '待发货订单', value: s.pendingShipOrders ?? 0, color: '#e6a23c' },
+    { label: '已发货订单', value: s.shippedOrders ?? 0, color: '#409eff' },
+    { label: '已完成订单', value: s.completedOrders ?? 0, color: '#67c23a' },
+    { label: '订单总数', value: s.totalOrders ?? 0, color: '#303133' },
+    { label: '商品总数', value: s.totalProducts ?? 0, color: '#303133' },
+    { label: '在售商品', value: s.onSaleProducts ?? 0, color: '#67c23a' },
+  ]
+})
+
 async function fetchMerchantStatus() {
   loading.value = true
   try {
     const res = await getMerchantStatus()
     merchantInfo.value = res.data || null
+    // 已审核通过的商家再拉取经营统计
+    if (merchantInfo.value?.auditStatus === 1) {
+      const statsRes = await getMerchantStats()
+      stats.value = statsRes.data || null
+    }
   } catch {
     merchantInfo.value = null
   } finally {
@@ -133,6 +164,15 @@ onMounted(() => { fetchMerchantStatus() })
 /* 信息卡片 */
 .info-card {
   border-radius: 8px;
+}
+
+/* 经营统计 */
+.stat-card {
+  border-radius: 8px;
+  text-align: center;
+
+  .stat-value { font-size: 24px; font-weight: 700; }
+  .stat-label { margin-top: 6px; font-size: 13px; color: #909399; }
 }
 
 .card-header {

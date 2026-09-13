@@ -12,8 +12,7 @@ import { useUserStore } from '@/stores'
  *   2. 请求拦截器自动携带 token（Sa-Token Bearer 格式）
  *   3. 响应拦截器统一处理业务码 + HTTP 状态码
  *   4. 401 自动清除登录态并跳转登录页
- *   5. 支持请求取消（页面切换时取消未完成的请求）
- *   6. 使用 json-bigint 解析响应，防止 Long 型 ID 精度丢失
+ *   5. 使用 json-bigint 解析响应，防止 Long 型 ID 精度丢失
  *
  * 后端 RESTful 接口规范：
  *   成功响应格式 → { code: 200, message: "success", data: {...} }
@@ -109,10 +108,11 @@ service.interceptors.response.use(
 
 /**
  * 统一处理 401 未授权
- * 清除 Pinia 用户状态 + localStorage token，跳转登录页并记录来源路径
+ * 清除 Pinia 用户状态 + localStorage token + 购物车缓存，跳转登录页并记录来源路径
  */
 function handleUnauthorized() {
   const userStore = useUserStore()
+  if (!userStore.isLoggedIn) return   // 已处理过，避免并发401重复弹跳转
   userStore.clearUserInfo()
   router.push({
     name: 'Login',

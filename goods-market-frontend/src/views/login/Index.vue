@@ -110,7 +110,7 @@ async function refreshCaptcha() {
 }
 
 async function handlePwdLogin() {
-  await pwdFormRef.value.validate()
+  try { await pwdFormRef.value.validate() } catch { return }
   loading.value = true
   try {
     const res = await loginByPassword(pwdForm)
@@ -156,14 +156,14 @@ async function handleSendCode() {
 }
 
 async function handleSmsLogin() {
-  await smsFormRef.value.validate()
+  try { await smsFormRef.value.validate() } catch { return }
   loading.value = true
   try {
     const res = await loginBySms(smsForm)
     userStore.setLoginInfo(res.data)
     ElMessage.success('登录成功')
     router.push(route.query.redirect || '/')
-  } finally {
+  } catch {} finally {
     loading.value = false
   }
 }

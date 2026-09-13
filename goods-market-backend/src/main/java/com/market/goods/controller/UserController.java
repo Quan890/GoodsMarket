@@ -149,6 +149,25 @@ public class UserController {
         return Result.ok(userService.getUserInfo(userId));
     }
 
+    // ==================== 修改密码 ====================
+
+    /**
+     * 修改密码（需登录）
+     *
+     * 权限：需要登录
+     * 请求：PUT /api/user/password
+     * 参数：{"oldPassword": "xxx", "newPassword": "yyy"}
+     *
+     * 校验原密码通过后更新为新密码，并强制退出登录（需重新登录）
+     */
+    @Operation(summary = "修改密码", description = "校验原密码后修改密码，修改后需重新登录")
+    @PutMapping("/password")
+    public Result<Void> changePassword(@Valid @RequestBody ChangePasswordDTO dto) {
+        long userId = StpUtil.getLoginIdAsLong();
+        userService.changePassword(userId, dto);
+        return Result.ok(null, "密码修改成功，请重新登录");
+    }
+
     // ==================== 注销账户 ====================
 
     /**

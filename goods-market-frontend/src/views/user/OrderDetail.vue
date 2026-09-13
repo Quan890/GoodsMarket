@@ -73,9 +73,10 @@
         </div>
         <div class="actions">
           <template v-if="order.status === 0">
-            <el-button type="danger" size="large" :loading="payLoading" @click="handlePay">立即支付</el-button>
+            <el-button type="danger" size="large" @click="goPay">立即支付</el-button>
             <el-button size="large" :loading="cancelLoading" @click="handleCancel">取消订单</el-button>
           </template>
+          <el-button v-if="order.status === 4" type="success" size="large" :loading="receiptLoading" @click="handleReceipt">确认收货</el-button>
           <el-button v-if="order.status === 3" type="primary" size="large" @click="goHome">再次购买</el-button>
           <el-button size="large" @click="goBack">返回列表</el-button>
         </div>
@@ -92,23 +93,24 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Picture, CircleCheckFilled, Clock, WarningFilled } from '@element-plus/icons-vue'
-import { getOrderDetail, cancelOrder, mockPay } from '@/api/order'
+import { Picture, CircleCheckFilled, Clock, WarningFilled, Van } from '@element-plus/icons-vue'
+import { getOrderDetail, cancelOrder, confirmReceipt } from '@/api/order'
 
 const route = useRoute()
 const router = useRouter()
 
 const order = ref(null)
 const loading = ref(false)
-const payLoading = ref(false)
 const cancelLoading = ref(false)
+const receiptLoading = ref(false)
 
-// 状态映射
+// 状态映射（0待支付 1已支付/待发货 2已取消 3已完成 4已发货/待收货）
 const STATUS_MAP = {
   0: { text: '待付款', desc: '请尽快完成支付，超时将自动取消', tagType: 'warning', icon: Clock, cls: 'status-unpaid' },
-  1: { text: '已付款', desc: '订单已支付成功，等待商家发货', tagType: 'primary', icon: CircleCheckFilled, cls: 'status-paid' },
+  1: { text: '待发货', desc: '订单已支付成功，等待商家发货', tagType: 'primary', icon: CircleCheckFilled, cls: 'status-paid' },
   2: { text: '已取消', desc: '订单已取消', tagType: 'info', icon: WarningFilled, cls: 'status-cancelled' },
   3: { text: '已完成', desc: '交易完成，感谢您的购买', tagType: 'success', icon: CircleCheckFilled, cls: 'status-completed' },
+  4: { text: '待收货', desc: '商家已发货，请注意查收', tagType: 'success', icon: Van, cls: 'status-shipped' },
 }
 
 const statusText = computed(() => STATUS_MAP[order.value?.status]?.text ?? '未知')
@@ -132,15 +134,27 @@ async function fetchDetail() {
   }
 }
 
-/** 支付 */
-async function handlePay() {
-  payLoading.value = true
+/** 去收银台支付 */
+function goPay() {
+  router.push({ name: 'Payment', params: { orderNo: order.value.orderNo } })
+}
+
+/** 确认收货 */
+async function handleReceipt() {
   try {
-    await mockPay({ orderNo: order.value.orderNo, payMethod: 2 })
-    ElMessage.success('支付成功')
+    await ElMessageBox.confirm('确认已收到商品？确认后订单将变为已完成', '确认收货', {
+      confirmButtonText: '确认收货',
+      cancelButtonText: '取消',
+      type: 'info',
+    })
+  } catch { return }
+  receiptLoading.value = true
+  try {
+    await confirmReceipt(order.value.orderNo)
+    ElMessage.success('已确认收货')
     fetchDetail()
   } catch {} finally {
-    payLoading.value = false
+    receiptLoading.value = false
   }
 }
 
@@ -191,6 +205,7 @@ onMounted(() => { fetchDetail() })
 
   &.status-unpaid { background: linear-gradient(135deg, #e6a23c, #f0c78a); }
   &.status-paid { background: linear-gradient(135deg, #409eff, #79bbff); }
+  &.status-shipped { background: linear-gradient(135deg, #67c23a, #95d475); }
   &.status-completed { background: linear-gradient(135deg, #67c23a, #95d475); }
   &.status-cancelled { background: linear-gradient(135deg, #909399, #b1b3b8); }
 }

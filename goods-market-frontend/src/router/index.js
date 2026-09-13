@@ -273,8 +273,11 @@ router.beforeEach(async (to, from, next) => {
       setUserInfoFetched(true)
       role = userStore.role
     } catch {
-      setUserInfoFetched(false)
-      isLoggedIn = false
+      // 拉取失败：token 无效（过期/被注销）时 clearUserInfo 已清除本地登录态；
+      // 请求层401会自动跳登录页，这里直接以未登录状态继续走守卫逻辑
+      setUserInfoFetched(true)
+      isLoggedIn = userStore.isLoggedIn
+      role = userStore.role
     }
   }
 
@@ -385,11 +388,11 @@ function handleRoleDenied(userStore, to, next) {
 // ============================================================
 
 /**
- * 路由跳转完成后的钩子
- * 可用于：关闭全局 loading、埋点统计等
+ * 全局后置钩子
+ * 可用于：关闭全局 loading、页面访问统计等
  */
 router.afterEach((to, from) => {
-  // 预留：NProgress.done() 或页面访问统计
+  // 预留：页面访问统计
 })
 
 export default router

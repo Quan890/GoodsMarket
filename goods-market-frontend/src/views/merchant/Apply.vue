@@ -37,7 +37,7 @@
         <h3>已驳回</h3>
         <p>很抱歉，您的入驻申请未通过审核。</p>
         <div class="status-info">
-          <p><strong>驳回原因：</strong>{{ merchantStatus.reason || '未说明' }}</p>
+          <p><strong>驳回原因：</strong>{{ merchantStatus.auditRemark || '未说明' }}</p>
         </div>
         <el-button type="primary" @click="handleReapply">
           重新申请

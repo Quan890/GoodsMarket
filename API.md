@@ -14,6 +14,12 @@
 { "code": 200, "message": "success", "data": { "records": [], "total": 100, "current": 1, "size": 10, "pages": 10 } }
 ```
 
+**序列化约定:**
+- 雪花 ID（超出 JS 安全整数范围的 Long）序列化为**字符串**，小数值保持数字；
+- `LocalDateTime` 统一序列化为 `yyyy-MM-dd HH:mm:ss`。
+
+**订单状态:** 0=待支付，1=已支付（待发货），2=已取消，3=已完成，4=已发货（待收货）。
+
 ---
 
 ## 一、用户模块 `/user`
@@ -104,6 +110,18 @@ Content-Type: application/json
 ```
 
 管理员不可注销。商家需先删除所有商品。
+
+### 1.10 修改密码（需登录）
+
+```
+PUT /api/user/password
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{ "oldPassword": "123456", "newPassword": "new123456" }
+```
+
+校验原密码，新密码 6-20 位。修改成功后原 token 失效，需重新登录。
 
 ---
 
@@ -220,6 +238,24 @@ Authorization: Bearer <token>
 
 返回 `auditStatus`: 0=待审核，1=已通过，2=已驳回。
 
+### 4.3 商家发货（需商家角色）
+
+```
+PUT /api/merchant/order/ship/{orderNo}
+Authorization: Bearer <token>
+```
+
+本店铺已支付订单标记为已发货，详见 8.9。
+
+### 4.4 商家经营统计（需商家角色）
+
+```
+GET /api/merchant/stats
+Authorization: Bearer <token>
+```
+
+返回商家中心看板数据：`totalProducts`（商品总数）、`onSaleProducts`（在售数）、`totalOrders`、`todayOrders`、`pendingShipOrders`（待发货）、`shippedOrders`（已发货）、`completedOrders`、`totalSales`、`todaySales`（销售额，元）。
+
 ---
 
 ## 五、分类 `/category`
@@ -331,7 +367,11 @@ Content-Type: application/json
 }
 ```
 
-乐观锁扣减库存，事务保证一致性。返回订单号。
+乐观锁扣减库存，事务保证一致性。**按商家拆单**：结算商品跨多个商家时，每个商家生成一个子订单，返回订单号**数组**（单商家返回 1 个元素）：
+
+```json
+{ "code": 200, "data": ["GM2026091310564100000116", "GM2026091310564100000231"] }
+```
 
 ### 8.2 我的订单列表
 
@@ -340,7 +380,7 @@ GET /api/user/order/list?pageNum=1&pageSize=10&status=1
 Authorization: Bearer <token>
 ```
 
-`status`: 0=待支付，1=已支付，2=已取消，3=已完成。
+`status`: 0=待支付，1=已支付（待发货），2=已取消，3=已完成，4=已发货（待收货）。列表含商品明细 `items`。
 
 ### 8.3 订单详情
 
@@ -349,7 +389,7 @@ GET /api/user/order/detail/{orderNo}
 Authorization: Bearer <token>
 ```
 
-返回订单信息 + 商品明细列表。
+返回订单信息 + 商品明细列表。买家校验归属，商家可查看自己店铺的订单。
 
 ### 8.4 取消订单
 
@@ -370,7 +410,7 @@ Content-Type: application/json
 { "orderNo": "GM20260616000001", "payMethod": 2 }
 ```
 
-`payMethod`: 1=支付宝，2=微信。
+`payMethod`: 1=支付宝，2=微信。条件更新保证幂等，重复支付返回失败。
 
 ### 8.6 微信支付下单
 
@@ -379,7 +419,34 @@ POST /api/user/order/wx-pay/{orderNo}
 Authorization: Bearer <token>
 ```
 
-返回微信支付 V3 预支付参数。
+返回微信支付 V3 预支付参数（未配置商户参数时返回失败）。
+
+### 8.7 支付结果查询
+
+```
+GET /api/user/order/pay-result/{orderNo}
+Authorization: Bearer <token>
+```
+
+返回 `{ orderNo, status, statusDesc, paid }`，支付后前端轮询使用。
+
+### 8.8 确认收货
+
+```
+PUT /api/user/order/receipt/{orderNo}
+Authorization: Bearer <token>
+```
+
+仅已发货（status=4）订单可确认，确认后变为已完成（status=3）。
+
+### 8.9 商家发货（商家角色）
+
+```
+PUT /api/merchant/order/ship/{orderNo}
+Authorization: Bearer <token>
+```
+
+仅本店铺已支付（status=1）订单可发货，发货后变为已发货（status=4）。
 
 ---
 
@@ -493,6 +560,28 @@ Authorization: Bearer <token>
 ```
 
 返回 12 项指标：`totalOrders, todayOrders, pendingPaymentOrders, pendingDeliveryOrders, totalAmount, todayAmount, totalUsers, todayUsers, totalMerchants, pendingAuditMerchants, totalProducts, todayProducts`。
+
+---
+
+## 十、通用上传 `/upload`
+
+### 10.1 上传图片（需登录）
+
+```
+POST /api/upload/image
+Authorization: Bearer <token>
+Content-Type: multipart/form-data
+
+file: <图片文件>
+```
+
+支持 jpg/jpeg/png/gif/webp，单文件 ≤ 10MB（application.yml 可调）。返回可访问的 URL：
+
+```json
+{ "code": 200, "data": { "url": "/api/images/upload/202609/3f2a...png" } }
+```
+
+文件保存在服务端 `uploads/images/yyyyMM/` 目录（`app.upload-dir` 可配置）。
 
 ---
 

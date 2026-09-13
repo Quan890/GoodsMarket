@@ -61,12 +61,12 @@ public class UserServiceImpl implements UserService {
         );
 
         if (user == null) {
-            // 首次登录自动注册
+            // 首次登录自动注册（默认普通用户，否则无法使用购物车/下单等功能）
             user = new User();
             user.setPhone(dto.getPhone());
             user.setUsername("user_" + dto.getPhone());
             user.setNickname("用户" + dto.getPhone().substring(7));
-            user.setRole(UserRoleEnum.GUEST.getCode());
+            user.setRole(UserRoleEnum.USER.getCode());
             user.setStatus(1);
             user.setPassword(passwordEncoder.encode("SMS_LOGIN_" + System.currentTimeMillis()));
             userMapper.insert(user);
@@ -167,6 +167,32 @@ public class UserServiceImpl implements UserService {
         userMapper.updateById(user);
 
         log.info("密码重置成功：phone={}", dto.getPhone());
+    }
+
+    // ==================== 修改密码（需登录） ====================
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void changePassword(Long userId, ChangePasswordDTO dto) {
+        User user = userMapper.selectById(userId);
+        if (user == null) {
+            throw new BusinessException("用户不存在");
+        }
+
+        // 校验原密码（短信自动注册的用户无密码，原密码不匹配时提示走找回密码）
+        if (!passwordEncoder.matches(dto.getOldPassword(), user.getPassword())) {
+            throw new BusinessException("原密码错误");
+        }
+        if (passwordEncoder.matches(dto.getNewPassword(), user.getPassword())) {
+            throw new BusinessException("新密码不能与原密码相同");
+        }
+
+        user.setPassword(passwordEncoder.encode(dto.getNewPassword()));
+        userMapper.updateById(user);
+
+        // 修改密码后强制重新登录
+        StpUtil.logout();
+
+        log.info("用户修改密码成功：userId={}", userId);
     }
 
     // ==================== 注销账户 ====================

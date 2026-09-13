@@ -11,6 +11,7 @@ import com.market.goods.enums.OrderStatusEnum;
 import com.market.goods.exception.BusinessException;
 import com.market.goods.mapper.*;
 import com.market.goods.service.AdminService;
+import com.market.goods.util.OrderItemFiller;
 import com.market.goods.util.PageUtil;
 import com.market.goods.util.PageUtil.PageResult;
 import com.market.goods.vo.MerchantVO;
@@ -28,6 +29,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -47,6 +49,7 @@ public class AdminServiceImpl implements AdminService {
     private final ProductMapper productMapper;
     private final OrderMapper orderMapper;
     private final OrderItemMapper orderItemMapper;
+    private final OrderItemFiller orderItemFiller;
 
     // ==================== 用户管理 ====================
 
@@ -113,6 +116,12 @@ public class AdminServiceImpl implements AdminService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void updateUserRole(UserEditRoleDTO dto) {
+        // 防止管理员修改自己的角色（误操作降级会导致失去后台权限）
+        long currentAdminId = cn.dev33.satoken.stp.StpUtil.getLoginIdAsLong();
+        if (dto.getUserId().equals(currentAdminId)) {
+            throw new BusinessException("不能修改自己的角色");
+        }
+
         User user = userMapper.selectById(dto.getUserId());
         if (user == null) {
             throw new BusinessException("用户不存在");
@@ -311,8 +320,9 @@ public class AdminServiceImpl implements AdminService {
 
         IPage<OrderVO> result = orderMapper.selectOrderPageByAdmin(page, params);
 
-        // 填充状态描述
+        // 填充状态描述 + 商品明细（列表页展示用）
         result.getRecords().forEach(this::fillOrderStatusDesc);
+        orderItemFiller.fill(result.getRecords());
         return PageUtil.toPageResult(result);
     }
 

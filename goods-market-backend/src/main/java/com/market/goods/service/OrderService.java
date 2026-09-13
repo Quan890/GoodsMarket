@@ -6,6 +6,7 @@ import com.market.goods.util.PageUtil.PageResult;
 import com.market.goods.vo.OrderVO;
 import jakarta.servlet.http.HttpServletRequest;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -20,16 +21,16 @@ public interface OrderService {
      *
      * 事务内操作：
      *   1. 乐观锁扣减商品库存（防超卖）
-     *   2. 新增订单主记录
+     *   2. 按商家拆分并新增订单主记录（跨商家购物车结算会生成多个子订单）
      *   3. 批量新增订单明细
      *   4. 清空用户选中的购物车条目
      *   任意异常整体回滚
      *
      * @param userId 当前登录用户ID
      * @param dto    下单参数（收货信息 + 商品明细）
-     * @return 订单编号
+     * @return 订单编号列表（单商家返回1个，跨商家返回多个）
      */
-    String createOrder(Long userId, CreateOrderDTO dto);
+    List<String> createOrder(Long userId, CreateOrderDTO dto);
 
     /**
      * 我的订单分页查询
@@ -63,6 +64,35 @@ public interface OrderService {
      * @param orderNo 订单编号
      */
     void cancelOrder(Long userId, String orderNo);
+
+    /**
+     * 商家发货
+     *
+     * 条件：订单属于当前商家且状态为已支付(1)
+     *
+     * @param userId  当前登录商家用户ID
+     * @param orderNo 订单编号
+     */
+    void shipOrder(Long userId, String orderNo);
+
+    /**
+     * 用户确认收货
+     *
+     * 条件：订单属于当前用户且状态为已发货(4)
+     *
+     * @param userId  当前登录用户ID
+     * @param orderNo 订单编号
+     */
+    void confirmReceipt(Long userId, String orderNo);
+
+    /**
+     * 查询订单支付结果（前端支付后轮询使用）
+     *
+     * @param userId  当前登录用户ID
+     * @param orderNo 订单编号
+     * @return { orderNo, status, statusDesc, paid }
+     */
+    Map<String, Object> getPayResult(Long userId, String orderNo);
 
     /**
      * 模拟支付（演示调试用，直接修改订单为已支付）

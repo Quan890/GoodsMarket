@@ -73,9 +73,9 @@ public class CollectServiceImpl implements CollectService {
         ProductCollect deletedRecord = collectMapper.selectDeletedRecord(userId, productId);
 
         if (deletedRecord != null) {
-            // 之前取消过收藏，恢复收藏（将 deleted 从 1 改为 0）
-            deletedRecord.setDeleted(0);
-            collectMapper.updateById(deletedRecord);
+            // 之前取消过收藏，恢复收藏（必须用原生 SQL：updateById 会被 @TableLogic
+            // 附加 WHERE deleted=0，导致恢复静默失败）
+            collectMapper.restoreDeletedRecord(deletedRecord.getId());
             log.info("恢复收藏商品：userId={}, productId={}", userId, productId);
         } else {
             // 无记录，新增收藏

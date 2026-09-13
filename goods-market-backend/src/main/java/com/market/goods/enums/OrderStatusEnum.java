@@ -7,12 +7,14 @@ import lombok.Getter;
  * 订单状态枚举
  *
  * 与 order 表 status 字段一一对应：
- *   UNPAID(0, "待支付")、PAID(1, "已支付")、CANCELLED(2, "已取消")、COMPLETED(3, "已完成")
+ *   UNPAID(0, "待支付")、PAID(1, "已支付")、CANCELLED(2, "已取消")、
+ *   COMPLETED(3, "已完成")、SHIPPED(4, "已发货")
  *
  * 状态流转：
  *   待支付 → 已支付（用户付款）
  *   待支付 → 已取消（用户主动取消 / 超时未支付系统自动取消）
- *   已支付 → 已完成（用户确认收货 / 系统自动确认）
+ *   已支付 → 已发货（商家发货）
+ *   已发货 → 已完成（用户确认收货）
  *   已支付 → 已取消（仅退款场景，需业务层校验）
  *
  * @author goods-market
@@ -31,7 +33,10 @@ public enum OrderStatusEnum {
     CANCELLED(2, "已取消"),
 
     /** 已完成 */
-    COMPLETED(3, "已完成");
+    COMPLETED(3, "已完成"),
+
+    /** 已发货 */
+    SHIPPED(4, "已发货");
 
     /** 状态编码（与数据库 status 字段对应） */
     private final int code;
@@ -66,6 +71,20 @@ public enum OrderStatusEnum {
      */
     public static boolean canCancel(int code) {
         return UNPAID.code == code || PAID.code == code;
+    }
+
+    /**
+     * 判断订单是否可以发货（仅已支付状态可发货）
+     */
+    public static boolean canShip(int code) {
+        return PAID.code == code;
+    }
+
+    /**
+     * 判断订单是否可以确认收货（已发货状态可收货）
+     */
+    public static boolean canReceipt(int code) {
+        return SHIPPED.code == code;
     }
 
     /**
